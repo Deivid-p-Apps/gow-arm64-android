@@ -24,33 +24,36 @@ Motorola Edge 30 Fusion (`tundra`), SM8350 (Snapdragon 888+), Adreno 725 (Turnip
 - [x] `recompiler`: parser PE32+ (sections/IAT/exports/.pdata/TLS)
 - [x] `recompiler`: descoberta de funções (`.pdata` + entry + TLS callbacks)
 - [x] `recompiler`: lifter x86-64 -> C (iced-x86)
-- [x] **Lift completo: 51.869 funções, 2.750.564 instruções; cobertura 99,97%**
-      (867 traps restantes). Gera 35 shards `gow_shard_NNN.c` + `gow_table.c`
+- [x] **Modelo de fluxo de controle correto: chamadas C diretas + `goto` local**
+      (provado end-to-end: um programa sintético de 2 funções roda e dá `rax=15`)
+- [x] **Lift completo: 51.869 funções, 2.754.847 instruções; cobertura ~99,96%**
+      (1.234 traps restantes). Gera 35 shards `gow_shard_NNN.c` + `gow_table.c` + `gow_protos.h`
 - [x] **C gerado compila de verdade** com `clang -O2` (shards testados, 0 erros)
-- [x] `runtime`: dispatch loop exato (call/ret/jmp/jcc), arquivo de registradores,
-      memória guest no image base original, flags exatas (add/sub/logic), shifts,
-      SSE/SSE2/AVX subset, MMX aliasing, conversões, comparações, string ops
-- [x] `runtime`: camada Win32/NT (resolver de imports por IAT; kernel32 core) +
-      stubs Steamworks / Sony / XInput
+- [x] `runtime`: dispatch loop, arquivo de registradores, memória guest no image
+      base original, pilha guest (8 MB), flags exatas, shifts, SSE/SSE2/AVX subset,
+      MMX aliasing, conversões, comparações, string ops, pack/pshufb/pminmax/etc.
+- [x] `runtime`: camada Win32/NT (import resolver por IAT) com kernel32 (memória,
+      threads, sync, timers) e **I/O de arquivos mapeado para o game dir**
+- [x] `runtime`: stubs Steamworks / Sony / XInput
 - [x] `runtime`/`jni.rs`: carrega o `.so` do jogo (do usuário), registra a tabela, roda
-- [x] `android/`: projeto Gradle, MANIFEST com MANAGE_EXTERNAL_STORAGE, SurfaceView,
-      loader de driver Turnip/adrenotools em C (JNI)
-- [x] CI: build do recompilador + APK debug como artifact
-- [x] Testes: semântica de flags e condition codes
+- [x] `android/`: Gradle, MANIFEST com MANAGE_EXTERNAL_STORAGE, SurfaceView,
+      loader de driver Turnip/adrenotools em C (JNI), logcat bridge
+- [x] CI: build do recompilador + teste end-to-end de fluxo + APK debug como artifact
+- [x] **APK instalado e executado no dispositivo via ADB sem crash; lê /storage/emulated/0/god**
+- [x] Testes: semântica de flags/cc + fluxo de controle ponta-a-ponta
 
 ### O que falta
-- [ ] Completar os 69 mnemônicos restantes (SSE antigos: unpck/psll/psrl/pshufb/haddps/
-      pextrw/insertps/roundps/blendps; x87; port I/O)
-- [ ] Comportamento da camada Win32 além do núcleo kernel32 (arquivos mapeados para
-      /storage/emulated/0/god, threads, sincronização, timers)
-- [ ] D3D11 -> Vulkan (DXVK Native numa fase 1; backend nativo em Rust na fase 2)
+- [ ] Completar ~95 mnemônicos restantes (x87, SSE antigos raros, port I/O, syscall)
+- [ ] Comportamento Win32 além do núcleo (threads reais, sincronização, timers mapeados)
+- [ ] D3D11 -> Vulkan (DXVK Native fase 1; backend nativo em Rust fase 2)
 - [ ] Áudio (XAudio2 -> AAudio/Oboe), entrada (XInput -> Android), swapchain (ANativeWindow)
-- [ ] Baixar artifact do CI e testar no dispositivo via ADB (install/logcat/medição)
+- [ ] Linkar todos os 35 shards num `.so` e carregar o jogo real no dispositivo
+- [ ] Medição de FPS real nos 4 cenários
 
 ## Bugs conhecidos
-- 867 instruções viram `gow_unimpl` (registradas, nunca silenciosas).
+- ~1.234 instruções viram `gow_unimpl` (registradas, nunca silenciosas).
 - Jump tables ambíguas (jmp [table+idx*8]) precisam do mapa de ponteiros resolvido.
-- Threads/SHE (SEH) ainda não modelados.
+- SEH (exceções x64) ainda não modelado.
 
 ## Próximos passos
 1. Fechar a cobertura do lifter (69 mnemônicos).
