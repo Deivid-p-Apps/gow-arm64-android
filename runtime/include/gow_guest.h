@@ -133,6 +133,8 @@ void     gow_x87_init(GowCpu* cpu);
 void     gow_xmm_punpck32(GowCpu* cpu, int dst, int src, uint32_t elem, uint32_t hi);
 void     gow_xmm_punpck_wd(GowCpu* cpu, int dst, int src, uint32_t hi);
 void     gow_xmm_punpck_qdq(GowCpu* cpu, int dst, int src, uint32_t hi);
+void     gow_xmm_movhpd(GowCpu* cpu, int dst, int src);
+uint64_t gow_xmm_pmovmskb_val(GowCpu* cpu, int src);
 void     gow_xmm_movshdup(GowCpu* cpu, int reg);
 void     gow_xmm_movsldup(GowCpu* cpu, int reg);
 void     gow_xmm_hadd(GowCpu* cpu, int dst, int src);

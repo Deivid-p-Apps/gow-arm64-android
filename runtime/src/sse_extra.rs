@@ -330,3 +330,21 @@ pub unsafe extern "C" fn gow_xmm_insertps(cpu: *mut GowCpu, dst: i32, src: i32, 
     c.xmm[dst as usize].0[0] = o[0] as u64 | (o[1] as u64) << 32;
     c.xmm[dst as usize].0[1] = o[2] as u64 | (o[3] as u64) << 32;
 }
+
+#[no_mangle]
+pub unsafe extern "C" fn gow_xmm_movhpd(cpu: *mut GowCpu, dst: i32, src: i32) {
+    let c = &mut *cpu;
+    let v = c.xmm[src as usize].0[0];
+    c.xmm[dst as usize].0[1] = v;
+}
+#[no_mangle]
+pub unsafe extern "C" fn gow_xmm_pmovmskb_val(cpu: *mut GowCpu, src: i32) -> u64 {
+    let c = &*cpu;
+    let s = c.xmm[src as usize].0;
+    let mut m = 0u64;
+    for i in 0..16 {
+        let byte = (s[i / 8] >> (8 * (i % 8))) & 0xff;
+        if byte & 0x80 != 0 { m |= 1 << i; }
+    }
+    m
+}
