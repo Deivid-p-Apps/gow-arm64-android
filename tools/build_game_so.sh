@@ -10,6 +10,7 @@ CC="${3:-clang}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 GEN="$OUT/gen"
 OBJ="$OUT/obj"
+RUNTIME_LIB="${RUNTIME_LIB:-$ROOT/target/release}"
 mkdir -p "$GEN" "$OBJ"
 
 echo "[1/3] lifting $EXE"
@@ -24,7 +25,11 @@ for f in "$GEN"/gow_shard_*.c "$GEN"/gow_table.c; do
 done
 
 echo "[3/3] linking libgow_game.so"
-"$CC" -shared -fPIC -o "$OUT/libgow_game.so" "$OBJ"/*.o
+# Link against the runtime so the .so declares DT_NEEDED libgow_runtime.so and the
+# Android linker resolves the gow_* symbols (dlopen alone is not enough).
+"$CC" -shared -fPIC -Wl,-soname,libgow_game.so \
+  -o "$OUT/libgow_game.so" "$OBJ"/*.o \
+  -L "$RUNTIME_LIB" -lgow_runtime
 # The runtime needs the import manifest next to the game library on the device.
 cp "$GEN/manifest.json" "$OUT/manifest.json"
 echo "done: $OUT/libgow_game.so (+ manifest.json)"
