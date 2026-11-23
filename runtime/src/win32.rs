@@ -214,6 +214,58 @@ impl ImportResolver {
             ("kernel32.dll", "FreeLibrary") => { c.gpr.rax = 1; true }
             ("kernel32.dll", "SetEndOfFile") => { c.gpr.rax = 1; true }
             ("kernel32.dll", "FlushFileBuffers") => { c.gpr.rax = 1; true }
+            ("kernel32.dll", "DeleteFileA") | ("kernel32.dll", "DeleteFileW") => {
+                let name = read_cstr(a0, dll_l.ends_with('w'));
+                c.gpr.rax = if std::fs::remove_file(self.files.translate(&name)).is_ok() { 1 } else { 0 };
+                true
+            }
+            ("kernel32.dll", "CreateDirectoryA") | ("kernel32.dll", "CreateDirectoryW") => {
+                let name = read_cstr(a0, dll_l.ends_with('w'));
+                c.gpr.rax = if std::fs::create_dir_all(self.files.translate(&name)).is_ok() { 1 } else { 0 };
+                true
+            }
+            ("kernel32.dll", "GetFileAttributesA") | ("kernel32.dll", "GetFileAttributesW") => {
+                let name = read_cstr(a0, dll_l.ends_with('w'));
+                let p = self.files.translate(&name);
+                c.gpr.rax = if p.is_dir() { 0x10 } else if p.exists() { 0x80 } else { 0xffff_ffff };
+                true
+            }
+            ("kernel32.dll", "FindFirstFileA") | ("kernel32.dll", "FindFirstFileW") => {
+                let name = read_cstr(a0, dll_l.ends_with('w'));
+                c.gpr.rax = self.files.find_first(&name);
+                true
+            }
+            ("kernel32.dll", "FindNextFileA") | ("kernel32.dll", "FindNextFileW") => {
+                c.gpr.rax = self.files.find_next(a0, a1) as u64;
+                true
+            }
+            ("kernel32.dll", "FindClose") => { self.files.find_close(a0); c.gpr.rax = 1; true }
+            ("kernel32.dll", "GetModuleFileNameA") | ("kernel32.dll", "GetModuleFileNameW") => {
+                let exe = self.files.translate("GoW.exe");
+                let s = exe.to_string_lossy();
+                let width = if dll_l.ends_with('w') { 2 } else { 1 };
+                let bytes = s.as_bytes();
+                let n = (a2 as usize / width).saturating_sub(1).min(bytes.len());
+                for i in 0..n { *(a0 as *mut u8).add(i * width) = bytes[i]; }
+                *(a0 as *mut u8).add(n * width) = 0;
+                c.gpr.rax = n as u64;
+                true
+            }
+            ("kernel32.dll", "GetCommandLineA") | ("kernel32.dll", "GetCommandLineW") => {
+                c.gpr.rax = self.files.cmdline_ptr(dll_l.ends_with('w')); true
+            }
+            ("kernel32.dll", "GetEnvironmentStringsA") | ("kernel32.dll", "GetEnvironmentStringsW") => {
+                c.gpr.rax = 0; true
+            }
+            ("kernel32.dll", "GetEnvironmentVariableA") | ("kernel32.dll", "GetEnvironmentVariableW") => {
+                c.gpr.rax = 0; true
+            }
+            ("kernel32.dll", "SetUnhandledExceptionFilter") | ("kernel32.dll", "UnhandledExceptionFilter") => {
+                c.gpr.rax = 1; true
+            }
+            ("kernel32.dll", "SetErrorMode") | ("kernel32.dll", "SetThreadPriority") => { c.gpr.rax = 0; true }
+            ("kernel32.dll", "GetVersionExA") | ("kernel32.dll", "GetVersionExW") => { c.gpr.rax = 1; true }
+            ("kernel32.dll", "GetVersion") => { c.gpr.rax = 0x0a00_0000; true }
             _ => false,
         };
         if !handled {
