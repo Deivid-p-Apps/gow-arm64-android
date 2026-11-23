@@ -20,16 +20,18 @@ pub struct ImportResolver {
     pub files: crate::fileio::FileTable,
     /// Set once the D3D11 backend (DXVK Native) is loaded: dll -> handle.
     pub graphics: crate::graphics::GraphicsBridge,
+    pub sync: crate::threads::SyncObjects,
+    pub threads: crate::threads::ThreadTable,
 }
 
 static MISSING: AtomicU64 = AtomicU64::new(0);
 
 impl ImportResolver {
     pub fn new(game_dir: &str) -> Self {
-        Self { slot_to_import: HashMap::new(), files: crate::fileio::FileTable::new(game_dir), graphics: crate::graphics::GraphicsBridge::new() }
+        Self { slot_to_import: HashMap::new(), files: crate::fileio::FileTable::new(game_dir), graphics: crate::graphics::GraphicsBridge::new(), sync: crate::threads::SyncObjects::new(), threads: crate::threads::ThreadTable::new() }
     }
     pub fn new_host() -> Self {
-        Self { slot_to_import: HashMap::new(), files: crate::fileio::FileTable::new("/storage/emulated/0/god"), graphics: crate::graphics::GraphicsBridge::new() }
+        Self { slot_to_import: HashMap::new(), files: crate::fileio::FileTable::new("/storage/emulated/0/god"), graphics: crate::graphics::GraphicsBridge::new(), sync: crate::threads::SyncObjects::new(), threads: crate::threads::ThreadTable::new() }
     }
 
     pub fn register(&mut self, iat_rva: u32, dll: &str, func: &str) {
@@ -111,7 +113,6 @@ impl ImportResolver {
             ("kernel32.dll", "TlsAlloc") => { c.gpr.rax = tls_alloc(); true }
             ("kernel32.dll", "GetLastError") => { c.gpr.rax = 0; true }
             ("kernel32.dll", "CreateFileA") | ("kernel32.dll", "CreateFileW") => {
-                // a0 = name ptr, a1 = access, a2 = share, a3 = sec; disp at [rsp+0x28]
                 let name = read_cstr(a0, dll_l.ends_with('w'));
                 let disp = *(arg(4) as *const u32);
                 let h = self.files.create(&name, a1 as u32, disp);
@@ -149,6 +150,30 @@ impl ImportResolver {
                 true
             }
             ("kernel32.dll", "CloseHandle") => { self.files.close(a0); c.gpr.rax = 1; true }
+            ("kernel32.dll", "CreateMutexA") | ("kernel32.dll", "CreateMutexW") => { c.gpr.rax = self.sync.create_mutex(); true }
+            ("kernel32.dll", "CreateEventA") | ("kernel32.dll", "CreateEventW") => { c.gpr.rax = self.sync.create_event(a2 != 0); true }
+            ("kernel32.dll", "WaitForSingleObject") => {
+                let signalled = self.sync.wait(a0, a1);
+                c.gpr.rax = if signalled { 0 } else { 0x102 }; // WAIT_OBJECT_0 / WAIT_TIMEOUT
+                true
+            }
+            ("kernel32.dll", "WaitForMultipleObjects") => { c.gpr.rax = 0; true }
+            ("kernel32.dll", "SetEvent") | ("kernel32.dll", "ResetEvent") => { self.sync.set_event(a0, func == "SetEvent"); c.gpr.rax = 1; true }
+            ("kernel32.dll", "ReleaseMutex") => { self.sync.release_mutex(a0); c.gpr.rax = 1; true }
+            ("kernel32.dll", "CreateThread") => {
+                // a0=sec, a1=stack, a2=size, a3=start; param at [rsp+0x28]
+                let start = a3;
+                let param = *(arg(4) as *const u64);
+                let h = self.threads.spawn(cpu, start, param);
+                c.gpr.rax = h;
+                true
+            }
+            ("kernel32.dll", "GetCurrentThread") | ("kernel32.dll", "GetCurrentProcess") => { c.gpr.rax = 0xffff_ffff_ffff_ffff; true }
+            ("kernel32.dll", "SwitchToThread") | ("kernel32.dll", "YieldProcessor") => { c.gpr.rax = 1; true }
+            ("kernel32.dll", "VirtualProtect") => { if a3 != 0 { *(a3 as *mut u32) = 0x40; } c.gpr.rax = 1; true }
+            ("kernel32.dll", "VirtualQuery") => { c.gpr.rax = 0; true }
+            ("kernel32.dll", "LoadLibraryA") | ("kernel32.dll", "LoadLibraryW") => { c.gpr.rax = 0; true }
+            ("kernel32.dll", "FreeLibrary") => { c.gpr.rax = 1; true }
             ("kernel32.dll", "SetEndOfFile") => { c.gpr.rax = 1; true }
             ("kernel32.dll", "FlushFileBuffers") => { c.gpr.rax = 1; true }
             _ => false,
