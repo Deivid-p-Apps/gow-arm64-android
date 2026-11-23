@@ -17,13 +17,17 @@ use crate::dispatch::GowCpu;
 pub struct ImportResolver {
     /// IAT slot RVA -> (dll, function)
     pub slot_to_import: HashMap<u32, (String, String)>,
+    pub files: crate::fileio::FileTable,
 }
 
 static MISSING: AtomicU64 = AtomicU64::new(0);
 
 impl ImportResolver {
-    pub fn new() -> Self {
-        Self { slot_to_import: HashMap::new() }
+    pub fn new(game_dir: &str) -> Self {
+        Self { slot_to_import: HashMap::new(), files: crate::fileio::FileTable::new(game_dir) }
+    }
+    pub fn new_host() -> Self {
+        Self { slot_to_import: HashMap::new(), files: crate::fileio::FileTable::new("/storage/emulated/0/god") }
     }
 
     pub fn register(&mut self, iat_rva: u32, dll: &str, func: &str) {
@@ -104,6 +108,47 @@ impl ImportResolver {
             | ("kernel32.dll", "DeleteCriticalSection") => true,
             ("kernel32.dll", "TlsAlloc") => { c.gpr.rax = tls_alloc(); true }
             ("kernel32.dll", "GetLastError") => { c.gpr.rax = 0; true }
+            ("kernel32.dll", "CreateFileA") | ("kernel32.dll", "CreateFileW") => {
+                // a0 = name ptr, a1 = access, a2 = share, a3 = sec; disp at [rsp+0x28]
+                let name = read_cstr(a0, dll_l.ends_with('w'));
+                let disp = *(arg(4) as *const u32);
+                let h = self.files.create(&name, a1 as u32, disp);
+                c.gpr.rax = h;
+                true
+            }
+            ("kernel32.dll", "ReadFile") => {
+                // a0=h, a1=buf, a2=len, a3=&read
+                let len = a2 as usize;
+                let mut buf = vec![0u8; len];
+                let n = self.files.read(a0, &mut buf);
+                std::ptr::copy_nonoverlapping(buf.as_ptr(), a1 as *mut u8, n as usize);
+                if a3 != 0 { *(a3 as *mut u32) = n; }
+                c.gpr.rax = 1;
+                true
+            }
+            ("kernel32.dll", "WriteFile") => {
+                let len = a2 as usize;
+                let buf = std::slice::from_raw_parts(a1 as *const u8, len);
+                let n = self.files.write(a0, buf);
+                if a3 != 0 { *(a3 as *mut u32) = n; }
+                c.gpr.rax = 1;
+                true
+            }
+            ("kernel32.dll", "SetFilePointer") | ("kernel32.dll", "SetFilePointerEx") => {
+                let off = a1 as i64;
+                let pos = self.files.seek(a0, off, a2 as u32);
+                c.gpr.rax = pos;
+                true
+            }
+            ("kernel32.dll", "GetFileSize") | ("kernel32.dll", "GetFileSizeEx") => {
+                let sz = self.files.size(a0);
+                if func.ends_with('x') && a1 != 0 { *(a1 as *mut u64) = sz; }
+                c.gpr.rax = sz;
+                true
+            }
+            ("kernel32.dll", "CloseHandle") => { self.files.close(a0); c.gpr.rax = 1; true }
+            ("kernel32.dll", "SetEndOfFile") => { c.gpr.rax = 1; true }
+            ("kernel32.dll", "FlushFileBuffers") => { c.gpr.rax = 1; true }
             _ => false,
         };
         if !handled {
@@ -123,7 +168,22 @@ impl ImportResolver {
 }
 
 impl Default for ImportResolver {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self { Self::new_host() }
+}
+
+unsafe fn read_cstr(ptr: u64, wide: bool) -> String {
+    if ptr == 0 { return String::new(); }
+    if wide {
+        let mut v = Vec::new();
+        let mut p = ptr as *const u16;
+        loop { let ch = *p; if ch == 0 { break; } v.push(ch); p = p.add(1); if v.len() > 4096 { break; } }
+        String::from_utf16_lossy(&v)
+    } else {
+        let mut v = Vec::new();
+        let mut p = ptr as *const u8;
+        loop { let ch = *p; if ch == 0 { break; } v.push(ch); p = p.add(1); if v.len() > 4096 { break; } }
+        String::from_utf8_lossy(&v).into_owned()
+    }
 }
 
 fn alloc_host(size: usize) -> *mut u8 {
