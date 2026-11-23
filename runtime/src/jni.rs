@@ -18,7 +18,7 @@ pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeInit(
         if game_dir.is_null() { String::new() }
         else { std::ffi::CStr::from_ptr(game_dir).to_string_lossy().into_owned() }
     };
-    eprintln!("[gow] nativeInit game_dir={dir}");
+    crate::glog!("[gow] nativeInit game_dir={dir}");
     0
 }
 
@@ -35,7 +35,7 @@ pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeRun(
 ) -> c_int {
     let path = unsafe { std::ffi::CStr::from_ptr(lib_path).to_string_lossy().into_owned() };
     let _ = CString::new("").unwrap();
-    eprintln!("[gow] loading recompiled game: {path}");
+    crate::glog!("[gow] loading recompiled game: {path}");
 
     // dlopen the user-built game .so (arm64), fetch its table.
     let handle = unsafe {
@@ -43,13 +43,13 @@ pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeRun(
         dlopen(cpath.as_ptr(), RTLD_NOW)
     };
     if handle.is_null() {
-        eprintln!("[gow] dlopen failed");
+        crate::glog!("[gow] dlopen failed");
         return -1;
     }
     let table_sym = unsafe { dlsym(handle, b"gow_func_table\0".as_ptr() as *const c_char) };
     let count_sym = unsafe { dlsym(handle, b"gow_func_count\0".as_ptr() as *const c_char) };
     if table_sym.is_null() || count_sym.is_null() {
-        eprintln!("[gow] game table symbols missing");
+        crate::glog!("[gow] game table symbols missing");
         return -2;
     }
     let count = unsafe { *(count_sym as *const u32) } as usize;
@@ -58,7 +58,7 @@ pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeRun(
     for e in table {
         if let Some(f) = e.fnptr { regs.push((e.rva, f)); }
     }
-    eprintln!("[gow] registered {} functions", regs.len());
+    crate::glog!("[gow] registered {} functions", regs.len());
     install_registry(regs);
 
     let mut cpu = GowCpu::new(image_base, image_size as usize);
@@ -86,7 +86,7 @@ pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeSurfaceCreated(
     // Resolve Java Surface -> ANativeWindow, the handle the swapchain binds to.
     let android_win = unsafe { android_window_from_surface(env, surface) };
     unsafe { WINDOW = android_win };
-    eprintln!("[gow] surface created: ANativeWindow={:p}", android_win);
+    crate::glog!("[gow] surface created: ANativeWindow={:p}", android_win);
 }
 
 #[no_mangle]
@@ -96,7 +96,7 @@ pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeSurfaceChanged(
     w: c_int,
     h: c_int,
 ) {
-    eprintln!("[gow] surface changed: {w}x{h}");
+    crate::glog!("[gow] surface changed: {w}x{h}");
 }
 
 #[no_mangle]
@@ -105,7 +105,7 @@ pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeSurfaceDestroyed(
     _thiz: *mut std::ffi::c_void,
 ) {
     unsafe { WINDOW = std::ptr::null_mut(); }
-    eprintln!("[gow] surface destroyed");
+    crate::glog!("[gow] surface destroyed");
 }
 
 /// ANativeWindow_fromSurface(JNIEnv*, jobject) from libandroid.so.

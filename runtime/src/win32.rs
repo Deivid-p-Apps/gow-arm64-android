@@ -109,7 +109,7 @@ impl ImportResolver {
         if !handled {
             let n = MISSING.fetch_add(1, Ordering::Relaxed);
             if n < 128 {
-                eprintln!("[gow.win32] unimplemented import: {dll}!{func}");
+                crate::glog!("[gow.win32] unimplemented import: {dll}!{func}");
             }
         }
         let _ = arg;

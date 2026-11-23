@@ -392,7 +392,7 @@ pub unsafe extern "C" fn gow_trampoline(cpu: *mut GowCpu, target_rva: u32) {
     let c = &mut *cpu;
     c.missing_indirect_calls += 1;
     if c.missing_indirect_calls <= 64 {
-        eprintln!("[gow] trampoline miss -> rva=0x{target_rva:x} (no lifted entry)");
+        crate::glog!("[gow] trampoline miss -> rva=0x{target_rva:x} (no lifted entry)");
     }
 }
 
@@ -431,7 +431,7 @@ pub unsafe extern "C" fn gow_unimpl(cpu: *mut GowCpu, rva: u32, mnemonic: u32) {
     let c = &mut *cpu;
     c.unimpl_hits += 1;
     if c.unimpl_hits <= 64 {
-        eprintln!("[gow] UNIMPLEMENTED at rva=0x{rva:x} mnemonic={mnemonic}");
+        crate::glog!("[gow] UNIMPLEMENTED at rva=0x{rva:x} mnemonic={mnemonic}");
     }
 }
 
@@ -1250,7 +1250,7 @@ pub unsafe extern "C" fn gow_run(cpu: *mut GowCpu, entry_rva: u32) {
         }
         steps += 1;
         if steps > 5_000_000_000 {
-            eprintln!("[gow] step budget exhausted");
+            crate::glog!("[gow] step budget exhausted");
             break;
         }
     }
