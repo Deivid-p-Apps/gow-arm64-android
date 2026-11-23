@@ -50,7 +50,7 @@ public class GowActivity extends Activity implements SurfaceHolder.Callback {
         final long IMAGE_BASE = 0x140000000L;
         final long IMAGE_SIZE = 0x519f000L;
         final int ENTRY_RVA = 0x3ec680;
-        String privDir = getFilesDir().getAbsolutePath();
+        String privDir = getApplicationInfo().nativeLibraryDir;
         int rc = nativeLoadAndRun(godDir.getAbsolutePath(), privDir, IMAGE_BASE, IMAGE_SIZE, ENTRY_RVA);
         Log.i(TAG, "nativeLoadAndRun returned " + rc);
     }

@@ -10,14 +10,11 @@ use crate::dispatch::{install_registry, GowCpu, GowFuncEntry};
 
 #[no_mangle]
 pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeInit(
-    _env: *mut std::ffi::c_void,
+    env: *mut std::ffi::c_void,
     _thiz: *mut std::ffi::c_void,
-    game_dir: *const c_char,
+    game_dir: *mut std::ffi::c_void,
 ) -> c_int {
-    let dir = unsafe {
-        if game_dir.is_null() { String::new() }
-        else { std::ffi::CStr::from_ptr(game_dir).to_string_lossy().into_owned() }
-    };
+    let dir = unsafe { jstring_to_string(env, game_dir) };
     crate::glog!("[gow] nativeInit game_dir={dir}");
     0
 }
@@ -109,45 +106,78 @@ extern "C" {
     fn dlsym(handle: *mut std::ffi::c_void, sym: *const c_char) -> *mut std::ffi::c_void;
 }
 
+/// JNI `GetStringUTFChars` / `ReleaseStringUTFChars` through the JNIEnv table
+/// (indices 169/170), since native methods receive `jstring`, not `char*`.
+unsafe fn jstring_to_string(env: *mut std::ffi::c_void, s: *mut std::ffi::c_void) -> String {
+    if env.is_null() || s.is_null() {
+        return String::new();
+    }
+    // JNIEnv is a pointer to a table of function pointers.
+    let table = *(env as *const *const usize);
+    let get = *table.add(169) as *const ();
+    let release = *table.add(170) as *const ();
+    if get.is_null() || release.is_null() {
+        return String::new();
+    }
+    type GetStr = unsafe extern "system" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, *mut u8) -> *const c_char;
+    type RelStr = unsafe extern "system" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, *const c_char);
+    let get: GetStr = std::mem::transmute(get);
+    let release: RelStr = std::mem::transmute(release);
+    let mut is_copy: u8 = 0;
+    let ptr = get(env, s, &mut is_copy);
+    if ptr.is_null() {
+        return String::new();
+    }
+    let owned = std::ffi::CStr::from_ptr(ptr).to_string_lossy().into_owned();
+    release(env, s, ptr);
+    owned
+}
+
 /// Discover the recompiled game library next to the game files, copy it into the
 /// app's private directory (Android cannot dlopen from external storage) and run
 /// it from the PE entry point. `priv_dir` is the app's private files path.
 #[no_mangle]
 pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeLoadAndRun(
-    _env: *mut std::ffi::c_void,
+    env: *mut std::ffi::c_void,
     _thiz: *mut std::ffi::c_void,
-    game_dir: *const c_char,
-    priv_dir: *const c_char,
+    game_dir: *mut std::ffi::c_void,
+    priv_dir: *mut std::ffi::c_void,
     image_base: u64,
     image_size: u64,
     entry_rva: u32,
 ) -> c_int {
-    let gdir = unsafe { std::ffi::CStr::from_ptr(game_dir).to_string_lossy().into_owned() };
-    let pdir = unsafe { std::ffi::CStr::from_ptr(priv_dir).to_string_lossy().into_owned() };
+    let gdir = unsafe { jstring_to_string(env, game_dir) };
+    let pdir = unsafe { jstring_to_string(env, priv_dir) };
+    crate::glog!("[gow] nativeLoadAndRun gdir={gdir} pdir={pdir}");
 
-    // If the game library ships inside the APK it is already in the app's
-    // nativeLibraryDir (priv_dir points at it); try that first.
+    // If the game library ships inside the APK it lives in the app's
+    // nativeLibraryDir; prefer it, then fall back to the game directory.
     let candidates = [
+        format!("{pdir}/libgow_game.so"),
         format!("{gdir}/libgow_game.so"),
         format!("{gdir}/drivers/libgow_game.so"),
-        format!("{pdir}/libgow_game.so"),
     ];
     let src = match candidates.iter().find(|p| std::path::Path::new(p).exists()) {
         Some(p) => p.clone(),
         None => {
-            crate::glog!("[gow] no libgow_game.so found in {gdir} (build it with tools/build_game_so.sh)");
+            crate::glog!("[gow] no libgow_game.so found (build it with tools/build_game_so.sh)");
             return -3;
         }
     };
-    // Copy into private storage so dlopen is allowed.
-    let dst = format!("{pdir}/libgow_game.so");
-    if let Err(e) = std::fs::copy(&src, &dst) {
-        crate::glog!("[gow] copy {src} -> {dst} failed: {e}");
-        return -4;
-    }
-    crate::glog!("[gow] game library staged: {dst}");
-    let cpath = CString::new(dst).unwrap();
-    run_game_library(cpath, image_base, image_size, entry_rva)
+    crate::glog!("[gow] found game library: {src}");
+    // If it is already in nativeLibraryDir it is loadable directly.
+    let load_path = if src.starts_with(&pdir) && pdir.contains("/lib") {
+        src
+    } else {
+        let dst = format!("{pdir}/libgow_game.so");
+        if let Err(e) = std::fs::copy(&src, &dst) {
+            crate::glog!("[gow] copy {src} -> {dst} failed: {e}");
+            return -4;
+        }
+        crate::glog!("[gow] staged: {dst}");
+        dst
+    };
+    run_game_library(CString::new(load_path).unwrap(), image_base, image_size, entry_rva)
 }
 
 fn run_game_library(path: CString, image_base: u64, image_size: u64, entry_rva: u32) -> c_int {
