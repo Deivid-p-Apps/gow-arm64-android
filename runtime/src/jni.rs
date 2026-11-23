@@ -205,6 +205,7 @@ fn install_import_resolver(lib_handle: *mut std::ffi::c_void, pdir: &str, gdir: 
 
 const RTLD_NOW: c_int = 2;
 const RTLD_LOCAL: c_int = 0;
+const RTLD_GLOBAL: c_int = 0x100;
 
 extern "C" {
     fn dlopen(path: *const c_char, mode: c_int) -> *mut std::ffi::c_void;
@@ -287,9 +288,19 @@ pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeLoadAndRun(
 }
 
 fn run_game_library(path: CString, pdir: &str, gdir: &str, image_base: u64, image_size: u64, entry_rva: u32) -> c_int {
-    let handle = unsafe { dlopen(path.as_ptr(), RTLD_NOW) };
+    // Expose the runtime's symbols globally so the game .so's references to
+    // gow_store/gow_load/gow_* (provided by libgow_runtime.so) resolve.
+    unsafe {
+        let self_path = CString::new(format!("{pdir}/libgow_runtime.so")).unwrap();
+        let _ = dlopen(self_path.as_ptr(), RTLD_NOW | RTLD_GLOBAL);
+    }
+    let handle = unsafe { dlopen(path.as_ptr(), RTLD_NOW | RTLD_GLOBAL) };
     if handle.is_null() {
-        crate::glog!("[gow] dlopen failed (arch mismatch? arm64 required)");
+        let err = unsafe { dlerror() };
+        let msg = if err.is_null() { "unknown".to_string() } else {
+            unsafe { std::ffi::CStr::from_ptr(err).to_string_lossy().into_owned() }
+        };
+        crate::glog!("[gow] dlopen libgow_game.so failed: {msg}");
         return -1;
     }
     let table_sym = unsafe { dlsym(handle, b"gow_func_table\0".as_ptr() as *const c_char) };
