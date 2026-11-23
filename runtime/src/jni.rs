@@ -87,7 +87,18 @@ pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeSurfaceCreated(
     let android_win = unsafe { android_window_from_surface(env, surface) };
     unsafe { WINDOW = android_win };
     crate::glog!("[gow] surface created: ANativeWindow={:p}", android_win);
+
+    // Bring up Vulkan on the window (Turnip driver via libadrenotools when
+    // present). Failure here is reported, never hidden.
+    if !android_win.is_null() {
+        match crate::vk::VkContext::new(android_win, "GoW arm64") {
+            Some(ctx) => unsafe { VK = Some(ctx); },
+            None => crate::glog!("[gow] Vulkan init failed (driver missing?)"),
+        }
+    }
 }
+
+static mut VK: Option<crate::vk::VkContext> = None;
 
 #[no_mangle]
 pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeSurfaceChanged(
