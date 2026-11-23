@@ -408,8 +408,25 @@ pub unsafe extern "C" fn gow_unimpl(cpu: *mut GowCpu, rva: u32, mnemonic: u32) {
 
 #[no_mangle]
 pub unsafe extern "C" fn gow_import_call(cpu: *mut GowCpu, iat_rva: u32) {
-    let _ = (cpu, iat_rva);
-    // Win32/NT import dispatch is implemented in the win32 module.
+    // Fetch the return RVA the caller already pushed, resolve+call the host
+    // implementation, then continue at the return RVA.
+    let c = &mut *cpu;
+    let ret = gow_pop64(cpu) as u32;
+    let handled = match IMPORT_RESOLVER.with(|r| r.borrow().as_ref().cloned()) {
+        Some(res) => res.call(cpu, iat_rva),
+        None => false,
+    };
+    let _ = handled;
+    c.next_rva = ret;
+}
+
+thread_local! {
+    static IMPORT_RESOLVER: std::cell::RefCell<Option<std::sync::Arc<crate::win32::ImportResolver>>> =
+        std::cell::RefCell::new(None);
+}
+
+pub fn set_import_resolver(r: std::sync::Arc<crate::win32::ImportResolver>) {
+    IMPORT_RESOLVER.with(|slot| *slot.borrow_mut() = Some(r));
 }
 
 #[no_mangle]

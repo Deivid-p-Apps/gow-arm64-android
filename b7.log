@@ -1,0 +1,26 @@
+   Compiling gow-runtime v0.1.0 (/data/data/com.termux/files/home/gow-arm64/runtime)
+warning: unused variable: `r`
+   --> runtime/src/dispatch.rs:574:102
+    |
+574 | ...*2], data[e*2+1]]) as i16; let r = (v >> (n/2)).min(0); let r = if (n/2) >= 16 { if v < 0 { -1i16 } else { 0 } } else { v >> (n/...
+    |                                   ^ help: if this is intentional, prefix it with an underscore: `_r`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `map`
+    --> runtime/src/dispatch.rs:1086:9
+     |
+1086 |     let map: HashMap<u32, GowFunc> = registry().iter().cloned().collect();
+     |         ^^^ help: if this is intentional, prefix it with an underscore: `_map`
+
+warning: `gow-runtime` (lib) generated 2 warnings (run `cargo fix --lib -p gow-runtime` to apply 2 suggestions)
+warning: unused dependency `serde`
+  --> runtime/Cargo.toml:13:1
+   |
+13 | serde = { version = "1", features = ["derive"] }
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `cargo::unused_dependencies` is set to `warn` by default
+help: consider removing the dependency on `serde`
+warning: `gow-runtime` (manifest) generated 1 warning
+    Finished `release` profile [optimized] target(s) in 4.52s
