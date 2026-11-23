@@ -19,6 +19,15 @@ unsafe impl Send for GraphicsBridge {}
 
 pub const D3D_DLLS: &[&str] = &["d3d11.dll", "dxgi.dll", "d3dcompiler_47.dll"];
 
+/// The exact D3D11/DXGI bootstrap entry points the game imports (measured from
+/// its IAT). Everything else is reached through the returned COM vtables, which
+/// the backend (DXVK Native) implements.
+pub const D3D_BOOTSTRAP: &[(&str, &str)] = &[
+    ("d3d11.dll", "D3D11CreateDevice"),
+    ("dxgi.dll", "CreateDXGIFactory1"),
+    ("d3dcompiler_47.dll", "D3DReflect"),
+];
+
 impl GraphicsBridge {
     pub fn new() -> Self {
         Self::default()

@@ -22,7 +22,8 @@ public class GowActivity extends Activity implements SurfaceHolder.Callback {
     static { System.loadLibrary("gow_runtime"); }
 
     private native int nativeInit(String gameDir);
-    private native int nativeRun(String libPath, long imageBase, long imageSize, int entryRva);
+    private native int nativeLoadAndRun(String gameDir, String privDir,
+                                        long imageBase, long imageSize, int entryRva);
     private native void nativeSurfaceCreated(Surface surface);
     private native void nativeSurfaceChanged(int w, int h);
     private native void nativeSurfaceDestroyed();
@@ -39,6 +40,16 @@ public class GowActivity extends Activity implements SurfaceHolder.Callback {
         File godDir = new File("/storage/emulated/0/god");
         Log.i(TAG, "game dir exists: " + godDir.exists() + " " + godDir.getAbsolutePath());
         nativeInit(godDir.getAbsolutePath());
+
+        // Constants from the PE header of GoW.exe (image base 0x140000000,
+        // entry RVA 0x3ec680, image size 0x519f000). The recompiled-game .so
+        // must be placed in the game dir; it is staged and loaded here.
+        final long IMAGE_BASE = 0x140000000L;
+        final long IMAGE_SIZE = 0x519f000L;
+        final int ENTRY_RVA = 0x3ec680;
+        String privDir = getFilesDir().getAbsolutePath();
+        int rc = nativeLoadAndRun(godDir.getAbsolutePath(), privDir, IMAGE_BASE, IMAGE_SIZE, ENTRY_RVA);
+        Log.i(TAG, "nativeLoadAndRun returned " + rc);
     }
 
     @Override

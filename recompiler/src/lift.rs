@@ -341,15 +341,16 @@ fn emit(c: &mut String, insn: &Instruction, image_base: u64, iat: &std::collecti
         Loop | Loope | Loopne => {
             let t = (insn.near_branch64() - image_base) as u32;
             let cc = match m { Loope => Some(0x4u32), Loopne => Some(0x5u32), _ => None };
-            // dec count (rcx); branch if not zero (+ ZF condition for loop e/ne)
-            writeln!(c, "  {{ uint64_t _c = GOW_REG(cpu, rcx) & 0xffffffffull; _c = (_c - 1) & 0xffffffffull; GOW_REG(cpu, rcx) = (GOW_REG(cpu, rcx) & 0xffffffff00000000ull) | _c;")?;
-            match cc {
-                Some(ccv) => writeln!(c, "     if (_c != 0 && gow_test_cc(cpu, {ccv})) {{ if (0){{}} goto L_{t:x}; }} }}")?,
-                None => writeln!(c, "     if (_c != 0) goto L_{t:x}; }}")?,
-            }
-            // Guard: only emit goto when target is a known label in this function.
-            if !(t >= func_start && t < func_end && starts.contains(&t)) {
-                writeln!(c, "  gow_trampoline(cpu, 0x{t:x}u);")?;
+            let inlined = t >= func_start && t < func_end && starts.contains(&t);
+            writeln!(c, "  {{ uint64_t _c = (GOW_REG(cpu, rcx) & 0xffffffffull); _c = (_c - 1) & 0xffffffffull; GOW_REG(cpu, rcx) = (GOW_REG(cpu, rcx) & 0xffffffff00000000ull) | _c;")?;
+            let cond = match cc {
+                Some(ccv) => format!("_c != 0 && gow_test_cc(cpu, {ccv})"),
+                None => "_c != 0".to_string(),
+            };
+            if inlined {
+                writeln!(c, "     if ({cond}) goto L_{t:x}; }}")?;
+            } else {
+                writeln!(c, "     if ({cond}) {{ gow_trampoline(cpu, 0x{t:x}u); }} }}")?;
             }
             return Ok(false);
         }

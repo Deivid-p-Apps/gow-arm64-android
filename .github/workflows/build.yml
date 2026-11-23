@@ -64,6 +64,22 @@ jobs:
         run: |
           export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
           cargo ndk -t arm64-v8a -o android/app/src/main/jniLibs build -p gow-runtime --release
+      - name: Stage recompiled game library (if provided as a release asset)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p android/app/src/main/jniLibs/arm64-v8a
+          # Allow an explicit override via a repo variable REPACK_ASSET (a release tag).
+          ASSET_TAG="${{ vars.REPACK_ASSET }}"
+          if [ -n "$ASSET_TAG" ]; then
+            gh release download "$ASSET_TAG" -R "${{ github.repository }}" \
+              -p 'libgow_game.so' -O android/app/src/main/jniLibs/arm64-v8a/libgow_game.so \
+              && echo "staged libgow_game.so from release $ASSET_TAG" \
+              || echo "no libgow_game.so on release $ASSET_TAG; APK will be runtime-only"
+          else
+            echo "REPACK_ASSET not set; APK is runtime-only (game .so loaded from device storage)"
+          fi
+          ls -la android/app/src/main/jniLibs/arm64-v8a/ || true
       - name: Assemble debug APK
         working-directory: android
         run: gradle assembleDebug --no-daemon
