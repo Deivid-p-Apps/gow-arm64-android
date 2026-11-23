@@ -105,14 +105,11 @@ fn map_at(base: u64, size: usize) -> (*mut u8, Vec<u8>, bool) {
             -1,
             0,
         );
-        // MAP_FAILED is (void*)-1
+        // MAP_FAILED is (void*)-1. On success the mapping lives for the process
+        // lifetime (we never munmap); return an empty Vec so nothing tries to
+        // free it.
         if p as isize != -1 {
-            let v = Vec::from_raw_parts(p, size, size);
-            // Prevent Vec from freeing the mmap on drop in the normal path: we
-            // intentionally keep it (the CPU owns it for the process lifetime).
-            let ptr = v.as_ptr() as *mut u8;
-            std::mem::forget(v);
-            return (ptr, Vec::new(), true);
+            return (p, Vec::new(), true);
         }
     }
     let mut v = vec![0u8; size];
