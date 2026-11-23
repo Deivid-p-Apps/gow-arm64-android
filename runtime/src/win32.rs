@@ -112,6 +112,44 @@ impl ImportResolver {
             | ("kernel32.dll", "DeleteCriticalSection") => true,
             ("kernel32.dll", "TlsAlloc") => { c.gpr.rax = tls_alloc(); true }
             ("kernel32.dll", "GetLastError") => { c.gpr.rax = 0; true }
+            ("kernel32.dll", "GetProcessHeap") => { c.gpr.rax = 0xdead0001; true }
+            ("kernel32.dll", "HeapCreate") => { c.gpr.rax = 0xdead0002; true }
+            ("kernel32.dll", "HeapDestroy") => { c.gpr.rax = 1; true }
+            ("kernel32.dll", "HeapAlloc") | ("kernel32.dll", "malloc") => { c.gpr.rax = alloc_host(a2 as usize) as u64; true }
+            ("kernel32.dll", "HeapReAlloc") => {
+                // allocate new + copy min(old,new); old size unknown -> copy new
+                let p = alloc_host(a3 as usize);
+                if a2 != 0 && p as u64 != 0 { std::ptr::copy_nonoverlapping(a2 as *const u8, p, a3 as usize); }
+                c.gpr.rax = p as u64; true
+            }
+            ("kernel32.dll", "HeapFree") => { c.gpr.rax = 1; true }
+            ("kernel32.dll", "HeapSize") => { c.gpr.rax = 0; true }
+            ("kernel32.dll", "HeapSetInformation") | ("kernel32.dll", "HeapCompact") => { c.gpr.rax = 1; true }
+            ("kernel32.dll", "GetSystemInfo") | ("kernel32.dll", "GetNativeSystemInfo") => {
+                // SYSTEM_INFO: fill a plausible 64-bit layout (page size 4096 etc.)
+                if a0 != 0 {
+                    let p = a0 as *mut u32;
+                    *p.add(0) = 0;         // wProcessorArchitecture + reserved
+                    *p.add(1).cast::<u32>() = 4096; // dwPageSize
+                    *p.add(2) = 0x10000;   // lpMinimumApplicationAddress (low)
+                    *p.add(3) = 0;         // high
+                    *p.add(4) = 0x7fff_0000; // lpMaximumApplicationAddress (low)
+                    *p.add(5) = 0;
+                    *p.add(6) = 6;         // dwNumberOfProcessors (host cores)
+                }
+                true
+            }
+            ("kernel32.dll", "GetSystemTime") | ("kernel32.dll", "GetLocalTime") => {
+                fill_systemtime(a0); true
+            }
+            ("kernel32.dll", "GetSystemTimeAsFileTime") => {
+                if a0 != 0 { let ft = (qpc() / 100) + 116444736000000000; *(a0 as *mut u64) = ft; } true
+            }
+            ("kernel32.dll", "IsDebuggerPresent") | ("kernel32.dll", "IsProcessorFeaturePresent") => { c.gpr.rax = 0; true }
+            ("kernel32.dll", "GetDateFormatA") | ("kernel32.dll", "GetTimeFormatA")
+            | ("kernel32.dll", "GetDateFormatW") | ("kernel32.dll", "GetTimeFormatW") => { c.gpr.rax = 0; true }
+            ("kernel32.dll", "GetCurrentDirectoryA") | ("kernel32.dll", "GetCurrentDirectoryW") => { c.gpr.rax = 0; true }
+            ("kernel32.dll", "SetCurrentDirectoryA") | ("kernel32.dll", "SetCurrentDirectoryW") => { c.gpr.rax = 1; true }
             ("kernel32.dll", "CreateFileA") | ("kernel32.dll", "CreateFileW") => {
                 let name = read_cstr(a0, dll_l.ends_with('w'));
                 let disp = *(arg(4) as *const u32);
@@ -216,6 +254,25 @@ unsafe fn read_cstr(ptr: u64, wide: bool) -> String {
 fn alloc_host(size: usize) -> *mut u8 {
     let layout = std::alloc::Layout::from_size_align(size.max(0x1000), 0x1000).unwrap();
     unsafe { std::alloc::alloc_zeroed(layout) }
+}
+
+unsafe fn fill_systemtime(p: u64) {
+    if p == 0 { return; }
+    // SYSTEMTIME { wYear,wMonth,wDayOfWeek,wDay,wHour,wMinute,wSecond,wMilliseconds }
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap();
+    let secs = now.as_secs();
+    let days = secs / 86400;
+    let rem = secs % 86400;
+    let w = p as *mut u16;
+    let year = 1970 + (days / 365) as u16;
+    *w.add(0) = year;
+    *w.add(1) = 1;
+    *w.add(2) = ((days + 4) % 7) as u16;
+    *w.add(3) = 1;
+    *w.add(4) = (rem / 3600) as u16;
+    *w.add(5) = ((rem % 3600) / 60) as u16;
+    *w.add(6) = (rem % 60) as u16;
+    *w.add(7) = now.subsec_millis() as u16;
 }
 fn qpc() -> u64 {
     std::time::SystemTime::now()
