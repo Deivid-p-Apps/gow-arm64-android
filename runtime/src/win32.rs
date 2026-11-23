@@ -266,6 +266,23 @@ impl ImportResolver {
             ("kernel32.dll", "SetErrorMode") | ("kernel32.dll", "SetThreadPriority") => { c.gpr.rax = 0; true }
             ("kernel32.dll", "GetVersionExA") | ("kernel32.dll", "GetVersionExW") => { c.gpr.rax = 1; true }
             ("kernel32.dll", "GetVersion") => { c.gpr.rax = 0x0a00_0000; true }
+            ("d3d11.dll", _) | ("dxgi.dll", _) | ("d3dcompiler_47.dll", _) => {
+                // Route to the loaded graphics backend (DXVK Native). The COM
+                // vtables it returns are what the game calls afterwards.
+                match self.graphics.resolve(&dll_l, &func) {
+                    Some(addr) => {
+                        let r = crate::graphics::GraphicsBridge::call_addr(addr, [a0, a1, a2, a3, *(arg(4) as *const u64), *(arg(5) as *const u64)]);
+                        c.gpr.rax = r;
+                        true
+                    }
+                    None => {
+                        let n = MISSING.fetch_add(1, Ordering::Relaxed);
+                        if n < 128 { crate::glog!("[gow.win32] gfx import unresolved (no backend): {dll}!{func}"); }
+                        c.gpr.rax = 0x8000_4005; // E_NOINTERFACE
+                        true
+                    }
+                }
+            }
             _ => false,
         };
         if !handled {
