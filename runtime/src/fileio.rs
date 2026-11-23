@@ -24,10 +24,17 @@ struct Handle {
     path: PathBuf,
 }
 
+struct Mapping {
+    base: u64,
+    len: usize,
+    _buf: Vec<u8>,
+}
+
 pub struct FileTable {
     game_dir: PathBuf,
     next: AtomicU64,
     handles: Mutex<HashMap<u64, Handle>>,
+    mappings: Mutex<HashMap<u64, Mapping>>,
     finds: Mutex<HashMap<u64, (Vec<PathBuf>, usize)>>,
 }
 
@@ -37,6 +44,7 @@ impl FileTable {
             game_dir: game_dir.into(),
             next: AtomicU64::new(0x100),
             handles: Mutex::new(HashMap::new()),
+            mappings: Mutex::new(HashMap::new()),
             finds: Mutex::new(HashMap::new()),
         }
     }
@@ -119,6 +127,54 @@ impl FileTable {
 
     pub fn close(&self, handle: u64) -> bool {
         self.handles.lock().unwrap().remove(&handle).is_some()
+    }
+
+    /// Create a file mapping of `size` bytes (0 = whole file) on `file_handle`.
+    /// Returns a pseudo mapping handle (>0) or INVALID_HANDLE.
+    pub fn create_mapping(&self, file_handle: u64, size: u64) -> u64 {
+        let h = self.handles.lock().unwrap();
+        let e = match h.get(&file_handle) {
+            Some(e) => e,
+            None => return INVALID_HANDLE,
+        };
+        let path = e.path.clone();
+        drop(h);
+        let real = if size == 0 {
+            std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
+        } else {
+            size
+        };
+        // Read the whole file into a buffer we own; MapViewOfFile returns its ptr.
+        match std::fs::read(&path) {
+            Ok(data) => {
+                let n = (real as usize).min(data.len());
+                let mut buf = data;
+                buf.truncate(n);
+                let ptr = buf.as_ptr() as u64;
+                let id = self.next.fetch_add(1, Ordering::Relaxed);
+                self.mappings.lock().unwrap().insert(id, Mapping { base: ptr, len: n, _buf: buf });
+                id
+            }
+            Err(_) => INVALID_HANDLE,
+        }
+    }
+
+    /// Return the base pointer for a mapping and a view offset/size.
+    pub fn map_view(&self, mapping: u64, offset: u64, size: u64) -> u64 {
+        let m = self.mappings.lock().unwrap();
+        match m.get(&mapping) {
+            Some(mm) => {
+                let _ = size;
+                if offset as usize >= mm.len { return 0; }
+                mm.base + offset
+            }
+            None => 0,
+        }
+    }
+
+    pub fn unmap_view(&self, _base: u64) -> bool {
+        // The mapping buffer stays alive with the Mapping entry.
+        true
     }
 
     pub fn exists(&self, win_path: &str) -> bool {

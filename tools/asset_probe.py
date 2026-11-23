@@ -164,15 +164,31 @@ def probe_pack_toc(path, size, which):
                 lines.append("    B[%d] a=%-10d b=%-10d hash=0x%016x size=%-10d flag=%d"
                              % (i, u32(b, o), u32(b, o + 4), u64(b, o + 8), u32(b, o + 0x10), u32(b, o + 0x14)))
     else:
-        # texpack.toc: only the self-size field is CONFIRMED.  Entry layout is
-        # UNRESOLVED (see docs/ASSETS.md) so we deliberately print no entries.
-        lines.append("  u32@0x20 = %d   (self size; matches file length %d: %s)"
-                     % (u32(hdr, 0x20), size, u32(hdr, 0x20) == size))
+        # texpack.toc: header fields CONFIRMED; entry table CONFIRMED by the
+        # identity  0x38 + u32@0x2C * 0x18 == u32@0x28 (data-region start)
+        # on root and all sampled chunk texpacks.
+        lines.append("  u32@0x20 = %d   (%s)"
+                     % (u32(hdr, 0x20),
+                        "self size; matches file length" if u32(hdr, 0x20) == size
+                        else ("TOC size (prefix of this pack body)" if path.endswith((".texpack", ".lodpack"))
+                              else "self size; MISMATCH with file length")))
         lines.append("  u32@0x24 = %d   (count-like)" % u32(hdr, 0x24))
-        lines.append("  u32@0x28 = %d   (first data region offset)" % u32(hdr, 0x28))
-        lines.append("  u32@0x2C = %d" % u32(hdr, 0x2C))
-        lines.append("  u32@0x30 = %d" % u32(hdr, 0x30))
-        lines.append("  ENTRY LAYOUT UNRESOLVED: do not parse without re-deriving it.")
+        doff = u32(hdr, 0x28)
+        lines.append("  u32@0x28 = %d   (data-region start)" % doff)
+        nent = u32(hdr, 0x2C)
+        lines.append("  u32@0x2C = %d   (entry count)" % nent)
+        lines.append("  u32@0x30 = %d   (constant 5 in sampled texpacks)" % u32(hdr, 0x30))
+        lines.append("  u32@0x34 = %d" % u32(hdr, 0x34))
+        lines.append("  entry table @ 0x38, stride 0x18: u64 h1, u64 h2, u32 offset, u32 flag")
+        end = 0x38 + nent * 0x18
+        lines.append("  0x38 + count*0x18 = %d  (== u32@0x28 %d ? %s)"
+                     % (end, doff, end == doff))
+        if nent and path.endswith(".toc"):
+            b = read_at(path, 0x38, 0x18 * min(nent, 3))
+            for i in range(len(b) // 0x18):
+                o = i * 0x18
+                lines.append("    e[%d] h1=0x%016x h2=0x%016x off=%-12d flag=%d"
+                             % (i, u64(b, o), u64(b, o + 8), u32(b, o + 0x10), u32(b, o + 0x14)))
     if path.endswith((".lodpack", ".texpack")):
         lines.append("  NOTE: this is the pack *body*, not a .toc.")
     return lines

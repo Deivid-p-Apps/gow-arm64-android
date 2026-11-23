@@ -190,6 +190,24 @@ impl ImportResolver {
                 true
             }
             ("kernel32.dll", "CloseHandle") => { self.files.close(a0); c.gpr.rax = 1; true }
+            ("kernel32.dll", "CreateFileMappingA") | ("kernel32.dll", "CreateFileMappingW") => {
+                // (file, attrs, protect, size_hi, size_lo)
+                let size = ((a3 & 0xffff_ffff) << 32) | (*(arg(4) as *const u64) & 0xffff_ffff);
+                c.gpr.rax = self.files.create_mapping(a0, size);
+                true
+            }
+            ("kernel32.dll", "MapViewOfFile") => {
+                // (mapping, access, off_hi, off_lo, count)
+                let off = ((a2 & 0xffff_ffff) << 32) | (a3 & 0xffff_ffff);
+                c.gpr.rax = self.files.map_view(a0, off, *(arg(4) as *const u64));
+                true
+            }
+            ("kernel32.dll", "MapViewOfFileEx") => {
+                let off = ((a2 & 0xffff_ffff) << 32) | (a3 & 0xffff_ffff);
+                c.gpr.rax = self.files.map_view(a0, off, *(arg(4) as *const u64));
+                true
+            }
+            ("kernel32.dll", "UnmapViewOfFile") => { self.files.unmap_view(a0); c.gpr.rax = 1; true }
             ("kernel32.dll", "CreateMutexA") | ("kernel32.dll", "CreateMutexW") => { c.gpr.rax = self.sync.create_mutex(); true }
             ("kernel32.dll", "CreateEventA") | ("kernel32.dll", "CreateEventW") => { c.gpr.rax = self.sync.create_event(a2 != 0); true }
             ("kernel32.dll", "WaitForSingleObject") => {
