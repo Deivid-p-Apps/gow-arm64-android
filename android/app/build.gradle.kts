@@ -29,8 +29,13 @@ android {
     }
 
     sourceSets["main"].jniLibs.srcDirs("src/main/jniLibs")
+
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
 }
 
 dependencies {
-    implementation("androidx.appcompat:appcompat:1.7.0")
 }
