@@ -27,6 +27,9 @@ public class GowActivity extends Activity implements SurfaceHolder.Callback {
     private native void nativeSurfaceCreated(Surface surface);
     private native void nativeSurfaceChanged(int w, int h);
     private native void nativeSurfaceDestroyed();
+    private native void nativeKey(int source, int keycode, boolean down);
+    private native void nativeMotion(int axis, float value);
+    private native void nativeTouch(int pointerId, float x, float y, boolean down);
 
     private SurfaceView surfaceView;
 
@@ -65,5 +68,49 @@ public class GowActivity extends Activity implements SurfaceHolder.Callback {
     @Override
     public void surfaceDestroyed(SurfaceHolder holder) {
         nativeSurfaceDestroyed();
+    }
+
+    @Override
+    public boolean onKeyDown(int keyCode, android.view.KeyEvent event) {
+        nativeKey(event.getSource(), keyCode, true);
+        return true;
+    }
+
+    @Override
+    public boolean onKeyUp(int keyCode, android.view.KeyEvent event) {
+        nativeKey(event.getSource(), keyCode, false);
+        return true;
+    }
+
+    @Override
+    public boolean onGenericMotionEvent(android.view.MotionEvent event) {
+        // Joystick axes.
+        for (int axis = android.view.MotionEvent.AXIS_X; axis <= android.view.MotionEvent.AXIS_RZ; axis++) {
+            nativeMotion(axis, event.getAxisValue(axis));
+        }
+        return true;
+    }
+
+    @Override
+    public boolean onTouchEvent(android.view.MotionEvent event) {
+        int action = event.getActionMasked();
+        int idx = event.getActionIndex();
+        int id = event.getPointerId(idx);
+        switch (action) {
+            case android.view.MotionEvent.ACTION_DOWN:
+            case android.view.MotionEvent.ACTION_POINTER_DOWN:
+                nativeTouch(id, event.getX(idx), event.getY(idx), true);
+                break;
+            case android.view.MotionEvent.ACTION_UP:
+            case android.view.MotionEvent.ACTION_POINTER_UP:
+                nativeTouch(id, event.getX(idx), event.getY(idx), false);
+                break;
+            case android.view.MotionEvent.ACTION_MOVE:
+                for (int i = 0; i < event.getPointerCount(); i++) {
+                    nativeTouch(event.getPointerId(i), event.getX(i), event.getY(i), true);
+                }
+                break;
+        }
+        return true;
     }
 }

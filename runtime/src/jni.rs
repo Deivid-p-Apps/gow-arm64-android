@@ -66,6 +66,42 @@ pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeRun(
     0
 }
 
+/// Deliver an Android key event to the input layer.
+#[no_mangle]
+pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeKey(
+    _env: *mut std::ffi::c_void,
+    _thiz: *mut std::ffi::c_void,
+    source: i32,
+    keycode: i32,
+    down: bool,
+) {
+    crate::input::global().on_key_event(source, keycode, down);
+}
+
+/// Deliver an Android motion (joystick axis) event to the input layer.
+#[no_mangle]
+pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeMotion(
+    _env: *mut std::ffi::c_void,
+    _thiz: *mut std::ffi::c_void,
+    axis: i32,
+    value: f32,
+) {
+    crate::input::global().on_motion(axis, value);
+}
+
+/// Deliver a touch event for the on-screen controller overlay.
+#[no_mangle]
+pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeTouch(
+    _env: *mut std::ffi::c_void,
+    _thiz: *mut std::ffi::c_void,
+    pointer_id: i32,
+    x: f32,
+    y: f32,
+    down: bool,
+) {
+    crate::input::global().on_touch(pointer_id, x, y, down);
+}
+
 const RTLD_NOW: c_int = 2;
 
 extern "C" {
