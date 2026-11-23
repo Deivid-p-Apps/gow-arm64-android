@@ -168,7 +168,9 @@ fn op_width(insn: &Instruction, idx: u32) -> u32 {
 }
 
 fn cc_const(cc: ConditionCode) -> u32 {
-    cc as u32
+    // iced's ConditionCode is O=1..G=16; gow_test_cc expects O=0..G=15.
+    let v = cc as u32;
+    if v == 0 { 0 } else { v - 1 }
 }
 
 pub fn lift(pe: &PeImage, out_dir: &std::path::Path) -> Result<LiftOutput> {
@@ -1171,4 +1173,25 @@ fn is_cmov(m: iced_x86::Mnemonic) -> bool {
 fn is_setcc(m: iced_x86::Mnemonic) -> bool {
     use iced_x86::Mnemonic as M;
     cc_in(m as u32, &[M::Seto as u32, M::Setno as u32, M::Setb as u32, M::Setae as u32, M::Sete as u32, M::Setne as u32, M::Setbe as u32, M::Seta as u32, M::Sets as u32, M::Setns as u32, M::Setp as u32, M::Setnp as u32, M::Setl as u32, M::Setge as u32, M::Setle as u32, M::Setg as u32])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iced_x86::ConditionCode;
+
+    #[test]
+    fn cc_const_maps_to_gow_test_cc_space() {
+        // gow_test_cc expects O=0,NO=1,B=2,AE=3,E=4,NE=5,BE=6,A=7,S=8,NS=9,P=10,
+        // NP=11,L=12,GE=13,LE=14,G=15. iced uses O=1..G=16.
+        assert_eq!(cc_const(ConditionCode::o), 0);
+        assert_eq!(cc_const(ConditionCode::no), 1);
+        assert_eq!(cc_const(ConditionCode::b), 2);
+        assert_eq!(cc_const(ConditionCode::ae), 3);
+        assert_eq!(cc_const(ConditionCode::e), 4);   // JE
+        assert_eq!(cc_const(ConditionCode::ne), 5);  // JNE
+        assert_eq!(cc_const(ConditionCode::l), 12);  // JL
+        assert_eq!(cc_const(ConditionCode::ge), 13); // JGE
+        assert_eq!(cc_const(ConditionCode::g), 15);  // JG
+    }
 }
