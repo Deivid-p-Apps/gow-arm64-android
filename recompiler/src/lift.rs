@@ -128,8 +128,10 @@ fn mem_expr(insn: &Instruction, image_base: u64) -> String {
 
 /// Size in bytes of memory operand.
 fn mem_size(insn: &Instruction) -> u32 {
-    let m = insn.memory_size();
-    let b = m.size() / 8;
+    // iced's MemorySize::size() is already in BYTES (e.g. UInt32 -> 4,
+    // Packed128 -> 16). The old code divided by 8, which made every memory
+    // access the wrong width.
+    let b = insn.memory_size().size();
     if b == 0 { 8 } else { b as u32 }
 }
 
@@ -806,7 +808,7 @@ fn emit(c: &mut String, insn: &Instruction, image_base: u64, iat: &std::collecti
         // --- x87 ---
         Fld => {
             if insn.op0_kind() == OpKind::Memory {
-                let is32 = insn.memory_size().size() == 32;
+                let is32 = insn.memory_size().size() == 4;
                 let m = if is32 { format!("(double)*(float*)(uintptr_t)({})", mem_expr(insn, image_base)) } else { format!("*(double*)(uintptr_t)({})", mem_expr(insn, image_base)) };
                 writeln!(c, "  gow_x87_ld(cpu, {m}, {});", if is32 {1} else {0})?;
             } else {
@@ -863,7 +865,7 @@ fn emit(c: &mut String, insn: &Instruction, image_base: u64, iat: &std::collecti
         Fst | Fstp => {
             let pop = m == Fstp;
             if insn.op0_kind() == OpKind::Memory {
-                let is32 = insn.memory_size().size() == 32;
+                let is32 = insn.memory_size().size() == 4;
                 let addr = mem_expr(insn, image_base);
                 if is32 {
                     writeln!(c, "  *(float*)(uintptr_t)({addr}) = (float)gow_x87_get(cpu, 0);")?;
@@ -883,7 +885,7 @@ fn emit(c: &mut String, insn: &Instruction, image_base: u64, iat: &std::collecti
             let pop = false;
             // Detect the "Faddp/Fsubp..." forms: destination is ST(0) with pop encoded in mnemonic name suffix handled by iced as separate mnemonics (Faddp etc).
             if insn.op0_kind() == OpKind::Memory {
-                let is32 = insn.memory_size().size() == 32;
+                let is32 = insn.memory_size().size() == 4;
                 let md = if is32 { format!("(double)*(float*)(uintptr_t)({})", mem_expr(insn, image_base)) } else { format!("*(double*)(uintptr_t)({})", mem_expr(insn, image_base)) };
                 writeln!(c, "  gow_x87_arith_m(cpu, {md}, {op}, 0);")?;
             } else {
@@ -902,7 +904,7 @@ fn emit(c: &mut String, insn: &Instruction, image_base: u64, iat: &std::collecti
         Fcom | Fcomp => {
             let pop = m == Fcomp;
             if insn.op0_kind() == OpKind::Memory {
-                let is32 = insn.memory_size().size() == 32;
+                let is32 = insn.memory_size().size() == 4;
                 let md = if is32 { format!("(double)*(float*)(uintptr_t)({})", mem_expr(insn, image_base)) } else { format!("*(double*)(uintptr_t)({})", mem_expr(insn, image_base)) };
                 writeln!(c, "  gow_x87_com_m(cpu, {md}, {pop2});", pop2 = if pop {1} else {0})?;
             } else {
