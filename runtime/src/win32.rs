@@ -266,6 +266,57 @@ impl ImportResolver {
             ("kernel32.dll", "SetErrorMode") | ("kernel32.dll", "SetThreadPriority") => { c.gpr.rax = 0; true }
             ("kernel32.dll", "GetVersionExA") | ("kernel32.dll", "GetVersionExW") => { c.gpr.rax = 1; true }
             ("kernel32.dll", "GetVersion") => { c.gpr.rax = 0x0a00_0000; true }
+            ("xinput1_4.dll", f) | ("xinput1_3.dll", f) | ("xinput9_1_0.dll", f) => {
+                let input = crate::input::global();
+                match f {
+                    "ord#2" | "XInputGetState" => {
+                        // a0 = user index, a1 = XINPUT_STATE*
+                        match input.xinput_get_state(a0 as u32) {
+                            Some(st) => { st.write_to(a1 as *mut u8); c.gpr.rax = 0; }
+                            None => { c.gpr.rax = 0x48f; } // ERROR_DEVICE_NOT_CONNECTED
+                        }
+                        true
+                    }
+                    "ord#3" | "XInputSetState" => {
+                        let motors = *(a1 as *const u16); // wLeftMotorSpeed
+                        let right = *((a1 as *const u16).add(1));
+                        c.gpr.rax = input.xinput_set_state(a0 as u32, motors, right) as u64;
+                        true
+                    }
+                    "XInputEnable" => { c.gpr.rax = 0; true }
+                    "ord#1" | "XInputGetCapabilities" => { c.gpr.rax = 0x48f; true }
+                    _ => { c.gpr.rax = 0x48f; true }
+                }
+            }
+            ("user32.dll", "GetAsyncKeyState") | ("user32.dll", "GetKeyState") => {
+                let vk = (a0 & 0xff) as u16;
+                c.gpr.rax = if crate::input::global().vk_down(vk) { 0x8000 } else { 0 };
+                true
+            }
+            ("user32.dll", "GetCursorPos") => {
+                let ms = crate::input::global().mouse_state(); let (x, y) = (ms.x, ms.y);
+                if a0 != 0 { *(a0 as *mut i32) = x; *((a0 as *mut i32).add(1)) = y; }
+                c.gpr.rax = 1; true
+            }
+            ("user32.dll", "GetSystemMetrics") => { c.gpr.rax = 0; true }
+            ("user32.dll", "ShowCursor") | ("user32.dll", "SetCursorPos") | ("user32.dll", "ClipCursor") => { c.gpr.rax = 0; true }
+            ("user32.dll", "GetForegroundWindow") => { c.gpr.rax = 1; true }
+            ("user32.dll", "SetForegroundWindow") | ("user32.dll", "SetFocus") => { c.gpr.rax = 1; true }
+            ("user32.dll", "GetDC") => { c.gpr.rax = 1; true }
+            ("user32.dll", "ReleaseDC") => { c.gpr.rax = 1; true }
+            ("xaudio2_7.dll", _) | ("xaudio2_8.dll", _) | ("xaudio2_9.dll", _) => {
+                // XAudio2 bootstrap: XAudio2Create returns an IXAudio2 vtable.
+                match func.as_str() {
+                    "XAudio2Create" => {
+                        let vt = crate::audio::xaudio2_create_vtable(crate::audio::global());
+                        if a0 != 0 { *(a0 as *mut u64) = vt; }
+                        c.gpr.rax = if vt == 0 { 0x8000_4005 } else { 0 };
+                        true
+                    }
+                    "CreateAudioReverb" | "CreateAudioVolumeMeter" => { c.gpr.rax = 0x8000_4005; true } // E_NOINTERFACE (honest)
+                    _ => { c.gpr.rax = 0x8000_4005; true }
+                }
+            }
             ("d3d11.dll", _) | ("dxgi.dll", _) | ("d3dcompiler_47.dll", _) => {
                 // Route to the loaded graphics backend (DXVK Native). The COM
                 // vtables it returns are what the game calls afterwards.

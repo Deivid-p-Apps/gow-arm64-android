@@ -3,6 +3,8 @@
 pub mod dispatch;
 pub mod log;
 pub mod win32;
+pub mod input;
+pub mod audio;
 pub mod fileio;
 pub mod graphics;
 pub mod threads;
