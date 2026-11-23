@@ -52,7 +52,7 @@ fn main() -> Result<()> {
         out_dir.join("gow_game.c").display()
     );
     if !res.unimpl.is_empty() {
-        eprintln!("[lift] UNIMPLEMENTED mnemonics present ({} distinct):", res.unimpl.len());
+        eprintln!("[lift] coverage: {} instruction instances still trailing as traps; {} distinct mnemonics:", res.unimpl_instances, res.unimpl.len());
         for m in res.unimpl.iter().take(200) {
             eprintln!("       - {m}");
         }

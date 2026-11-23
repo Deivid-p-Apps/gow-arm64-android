@@ -7,7 +7,7 @@ description = "Win32/NT + dispatcher runtime for recompiled God of War (2018)"
 
 [lib]
 name = "gow_runtime"
-crate-type = ["staticlib", "rlib"]
+crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
