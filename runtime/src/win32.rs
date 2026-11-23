@@ -317,6 +317,15 @@ impl ImportResolver {
                     _ => { c.gpr.rax = 0x8000_4005; true }
                 }
             }
+            (dll, _) if dll.starts_with("api-ms-win-crt-") || dll == "msvcp140.dll"
+                || dll == "vcruntime140.dll" || dll == "ucrtbase.dll" => {
+                if crate::crt::call(cpu, &func) { true } else {
+                    let n = MISSING.fetch_add(1, Ordering::Relaxed);
+                    if n < 200 { crate::glog!("[gow.crt] unimplemented: {dll}!{func}"); }
+                    c.gpr.rax = 0;
+                    true
+                }
+            }
             ("d3d11.dll", _) | ("dxgi.dll", _) | ("d3dcompiler_47.dll", _) => {
                 // Route to the loaded graphics backend (DXVK Native). The COM
                 // vtables it returns are what the game calls afterwards.
@@ -375,6 +384,20 @@ fn alloc_host(size: usize) -> *mut u8 {
     let layout = std::alloc::Layout::from_size_align(size.max(0x1000), 0x1000).unwrap();
     unsafe { std::alloc::alloc_zeroed(layout) }
 }
+
+/// Public allocation helpers used by the CRT shims.
+pub fn host_alloc(size: usize) -> *mut u8 { alloc_host(size.max(1)) }
+pub fn host_alloc_aligned(size: usize, align: usize) -> *mut u8 {
+    let layout = std::alloc::Layout::from_size_align(size.max(1), align.max(16)).unwrap();
+    unsafe { std::alloc::alloc_zeroed(layout) }
+}
+pub unsafe fn host_realloc(p: *mut u8, size: usize) -> *mut u8 {
+    // Size of the old block is unknown here; allocate new and copy conservatively.
+    let n = host_alloc(size.max(1));
+    if !p.is_null() { std::ptr::copy_nonoverlapping(p, n, size); }
+    n
+}
+pub unsafe fn host_free(_p: *mut u8) { /* bump/arena allocator: freed blocks stay until exit */ }
 
 unsafe fn fill_systemtime(p: u64) {
     if p == 0 { return; }
