@@ -73,3 +73,48 @@ extern "C" {
     fn dlopen(path: *const c_char, mode: c_int) -> *mut std::ffi::c_void;
     fn dlsym(handle: *mut std::ffi::c_void, sym: *const c_char) -> *mut std::ffi::c_void;
 }
+
+/// ANativeWindow handle for the Vulkan swapchain (set from Java surface callbacks).
+static mut WINDOW: *mut std::ffi::c_void = std::ptr::null_mut();
+
+#[no_mangle]
+pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeSurfaceCreated(
+    env: *mut std::ffi::c_void,
+    _thiz: *mut std::ffi::c_void,
+    surface: *mut std::ffi::c_void,
+) {
+    // Resolve Java Surface -> ANativeWindow, the handle the swapchain binds to.
+    let android_win = unsafe { android_window_from_surface(env, surface) };
+    unsafe { WINDOW = android_win };
+    eprintln!("[gow] surface created: ANativeWindow={:p}", android_win);
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeSurfaceChanged(
+    _env: *mut std::ffi::c_void,
+    _thiz: *mut std::ffi::c_void,
+    w: c_int,
+    h: c_int,
+) {
+    eprintln!("[gow] surface changed: {w}x{h}");
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeSurfaceDestroyed(
+    _env: *mut std::ffi::c_void,
+    _thiz: *mut std::ffi::c_void,
+) {
+    unsafe { WINDOW = std::ptr::null_mut(); }
+    eprintln!("[gow] surface destroyed");
+}
+
+/// ANativeWindow_fromSurface(JNIEnv*, jobject) from libandroid.so.
+unsafe fn android_window_from_surface(env: *mut std::ffi::c_void, surface: *mut std::ffi::c_void) -> *mut std::ffi::c_void {
+    type F = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+    let lib = dlopen(b"libandroid.so\0".as_ptr() as *const c_char, RTLD_NOW);
+    if lib.is_null() { return std::ptr::null_mut(); }
+    let sym = dlsym(lib, b"ANativeWindow_fromSurface\0".as_ptr() as *const c_char);
+    if sym.is_null() { return std::ptr::null_mut(); }
+    let f: F = std::mem::transmute(sym);
+    f(env, surface)
+}
