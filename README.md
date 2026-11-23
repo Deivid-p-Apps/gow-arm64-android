@@ -22,6 +22,8 @@ stays out of this repo (see `.gitignore`).
 
 ## Build & use
 
+### Recompiler (host)
+
 ```sh
 # 1) analyze the executable (M0)
 python3 tools/pe_probe.py "/path/to/GoW.exe"
@@ -29,7 +31,50 @@ python3 tools/pe_probe.py "/path/to/GoW.exe"
 # 2) build the recompiler and lift the whole game to C
 cargo build -p gow-recompiler --release
 ./target/release/gowrecomp "/path/to/GoW.exe" generated
-#  -> generated/gow_game.c , generated/manifest.json
+#  -> generated/gow_shard_NNN.c (35 shards), gow_table.c, gow_protos.h
+```
+
+### Build the recompiled game into a native library
+
+The recompiled game becomes a shared library the app loads at runtime — it is
+never committed (it is derived from your game files):
+
+```sh
+tools/build_game_so.sh "/path/to/GoW.exe" out
+#  -> out/gen/*.c  and  out/libgow_game.so   (arm64 when built with the NDK clang)
+```
+
+On desktop, `clang` produces a host `.so` useful for testing the dispatcher; for
+the device, pass the NDK clang (e.g. `aarch64-linux-android34-clang`) as the
+third argument.
+
+### APK
+
+CI builds `android/app` into a debug APK (artifact `gow-debug-apk`), which ships
+the runtime (`libgow_runtime.so`), the driver loader glue, the Java activity and
+the manifest. Test on the connected device:
+
+```sh
+adb install -r app-debug.apk
+adb shell appops set com.gow.arm64 MANAGE_EXTERNAL_STORAGE allow
+adb shell am start -n com.gow.arm64/.GowActivity
+adb logcat | grep GoW
+```
+
+The app reads the game files from `/storage/emulated/0/god/` at runtime and loads
+the user-built `libgow_game.so` from its private files directory. Custom Turnip
+drivers are loaded from `/storage/emulated/0/god/drivers/` (adrenotools package:
+`meta.json` + `libvulkan_freedreno.so`).
+
+### End-to-end control-flow test
+
+```sh
+python3 tools/make_flow_pe.py > flow.bin
+./target/release/gowrecomp flow.bin flowout
+clang -O2 -I runtime/include -I flowout tests/flow_runner.c \
+  flowout/gow_shard_000.c flowout/gow_table.c \
+  -L target/release -lgow_runtime -lpthread -Wl,-rpath,target/release -o flow_runner
+./flow_runner   # prints rax=15
 ```
 
 CI builds the recompiler and an arm64 debug APK; download the artifact and test on
