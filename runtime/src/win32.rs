@@ -333,7 +333,7 @@ impl ImportResolver {
                 // vtables it returns are what the game calls afterwards.
                 match self.graphics.resolve(&dll_l, &func) {
                     Some(addr) => {
-                        let r = crate::graphics::GraphicsBridge::call_addr(addr, [a0, a1, a2, a3, *(arg(4) as *const u64), *(arg(5) as *const u64)]);
+                        let r = crate::graphics::GraphicsBridge::call_addr_raw(addr, cpu);
                         c.gpr.rax = r;
                         true
                     }

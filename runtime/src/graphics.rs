@@ -85,21 +85,27 @@ impl GraphicsBridge {
         any
     }
 
-    /// Run `addr` with 6 raw args (Microsoft x64) and return RAX.
-    pub unsafe fn call_addr(addr: usize, args: [u64; 6]) -> u64 {
-        type F = unsafe extern "system" fn(u64, u64, u64, u64, u64, u64) -> u64;
+    /// Run `addr` with up to 10 args (Microsoft x64: first 4 in RCX/RDX/R8/R9,
+    /// the rest on the shadow-space stack). Returns RAX.
+    pub unsafe fn call_addr(addr: usize, args: [u64; 10]) -> u64 {
+        type F = unsafe extern "system" fn(u64, u64, u64, u64, u64, u64, u64, u64, u64, u64) -> u64;
         let f: F = std::mem::transmute(addr);
-        f(args[0], args[1], args[2], args[3], args[4], args[5])
+        f(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9])
     }
 
-    /// Forward a guest COM call (this in RCX, args in RDX/R8/R9/stack) to a host
-    /// function using the Microsoft x64 convention.
+    /// Forward a guest COM call to a host function, taking all arguments from
+    /// the guest register file and stack per the Microsoft x64 convention.
     pub unsafe fn call_addr_raw(addr: usize, c: *mut crate::dispatch::GowCpu) -> u64 {
         let cpu = &*c;
+        let rsp = cpu.gpr.rsp;
         let a = [
             cpu.gpr.rcx, cpu.gpr.rdx, cpu.gpr.r8, cpu.gpr.r9,
-            *((cpu.gpr.rsp as *const u8).add(0x28) as *const u64),
-            *((cpu.gpr.rsp as *const u8).add(0x30) as *const u64),
+            *((rsp as *const u8).add(0x28) as *const u64),
+            *((rsp as *const u8).add(0x30) as *const u64),
+            *((rsp as *const u8).add(0x38) as *const u64),
+            *((rsp as *const u8).add(0x40) as *const u64),
+            *((rsp as *const u8).add(0x48) as *const u64),
+            *((rsp as *const u8).add(0x50) as *const u64),
         ];
         Self::call_addr(addr, a)
     }
