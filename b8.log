@@ -94,12 +94,6 @@ warning: methods `rva_to_va` and `map_image` are never used
 
 warning: `gow-recompiler` (bin "gowrecomp") generated 10 warnings (run `cargo fix --bin "gowrecomp" -p gow-recompiler` to apply 2 suggestions)
    Compiling gow-runtime v0.1.0 (/data/data/com.termux/files/home/gow-arm64/runtime)
-error[E0599]: no method named `ord` found for reference `&str` in the current scope
-  --> runtime/src/steam.rs:43:16
-   |
-43 |     match func.ord() {
-   |                ^^^ method not found in `&str`
-
 warning: unused variable: `r`
    --> runtime/src/dispatch.rs:574:102
     |
@@ -114,9 +108,7 @@ warning: unused variable: `map`
 1086 |     let map: HashMap<u32, GowFunc> = registry().iter().cloned().collect();
      |         ^^^ help: if this is intentional, prefix it with an underscore: `_map`
 
-For more information about this error, try `rustc --explain E0599`.
-warning: `gow-runtime` (lib) generated 2 warnings
-error: could not compile `gow-runtime` (lib) due to 1 previous error; 2 warnings emitted
+warning: `gow-runtime` (lib) generated 2 warnings (run `cargo fix --lib -p gow-runtime` to apply 2 suggestions)
 warning: unused dependency `serde`
   --> runtime/Cargo.toml:13:1
    |
@@ -126,3 +118,4 @@ warning: unused dependency `serde`
    = note: `cargo::unused_dependencies` is set to `warn` by default
 help: consider removing the dependency on `serde`
 warning: `gow-runtime` (manifest) generated 1 warning
+    Finished `release` profile [optimized] target(s) in 4.98s

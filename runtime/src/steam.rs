@@ -40,9 +40,9 @@ pub fn sce(func: &str) -> Option<u64> {
 /// input layer maps real gamepads. Returning 0 = no controller is a real state,
 /// not a fake success.
 pub fn xinput(func: &str) -> Option<u64> {
-    match func.ord() {
-        Some(2) => Some(0), // XInputGetState -> ERROR_DEVICE_NOT_CONNECTED
-        Some(3) => Some(0), // XInputSetState
+    match func {
+        "ord#2" => Some(0), // XInputGetState -> ERROR_DEVICE_NOT_CONNECTED
+        "ord#3" => Some(0), // XInputSetState
         _ => Some(0),
     }
 }
