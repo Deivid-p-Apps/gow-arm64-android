@@ -82,6 +82,45 @@ pub fn LANES32(v: [u64; 2]) -> [u32; 4] {
     [v[0] as u32, (v[0] >> 32) as u32, v[1] as u32, (v[1] >> 32) as u32]
 }
 
+/// Map `size` bytes at the fixed address `base` (MAP_FIXED). Returns
+/// (pointer, owned Vec, whether mapping succeeded). On failure, falls back to a
+/// normal Vec so the program still runs (with a logged warning).
+fn map_at(base: u64, size: usize) -> (*mut u8, Vec<u8>, bool) {
+    #[cfg(unix)]
+    unsafe {
+        extern "C" {
+            fn mmap(addr: *mut u8, len: usize, prot: i32, flags: i32, fd: i32, off: i64) -> *mut u8;
+        }
+        const PROT_READ: i32 = 1;
+        const PROT_WRITE: i32 = 2;
+        const PROT_EXEC: i32 = 4;
+        const MAP_PRIVATE: i32 = 2;
+        const MAP_ANONYMOUS: i32 = 0x20; // Linux
+        const MAP_FIXED: i32 = 0x10;
+        let p = mmap(
+            base as *mut u8,
+            size,
+            PROT_READ | PROT_WRITE | PROT_EXEC,
+            MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
+            -1,
+            0,
+        );
+        // MAP_FAILED is (void*)-1
+        if p as isize != -1 {
+            let v = Vec::from_raw_parts(p, size, size);
+            // Prevent Vec from freeing the mmap on drop in the normal path: we
+            // intentionally keep it (the CPU owns it for the process lifetime).
+            let ptr = v.as_ptr() as *mut u8;
+            std::mem::forget(v);
+            return (ptr, Vec::new(), true);
+        }
+    }
+    let mut v = vec![0u8; size];
+    let p = v.as_mut_ptr();
+    (p, v, false)
+}
+
+
 /// Function table emitted by the recompiler (gow_game.c) is registered at
 /// startup via `install_registry`, so no extern symbol is required here.
 
@@ -90,10 +129,16 @@ pub struct GowFuncEntry { pub rva: u32, pub fnptr: Option<GowFunc> }
 
 impl GowCpu {
     pub fn new(image_base: u64, image_size: usize) -> Box<Self> {
-        let mut image_buf = vec![0u8; image_size];
-        let mut stack = vec![0u8; 8 * 1024 * 1024];
+        // Map the guest image at its ORIGINAL virtual address (e.g. 0x140000000)
+        // so guest pointers equal host pointers and absolute addresses in the
+        // recompiled code (globals, vtables) are valid. Falls back to a normal
+        // allocation if the fixed mapping is unavailable.
+        let (image, image_buf, fixed) = map_at(image_base, image_size);
+        let mut stack = vec![0u8; 16 * 1024 * 1024];
         let rsp = unsafe { stack.as_mut_ptr().add(stack.len()) as u64 }; // grows down
-        let image = image_buf.as_mut_ptr();
+        if !fixed {
+            crate::glog!("[gow] WARNING: could not map image at 0x{image_base:x}; absolute addresses may fault");
+        }
         Box::new(GowCpu {
             gpr: Gprs { rsp, ..Default::default() },
             xmm: [Xmm::default(); 17],

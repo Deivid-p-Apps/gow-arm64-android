@@ -2,6 +2,7 @@
 
 pub mod dispatch;
 pub mod hostcall;
+pub mod pe_load;
 pub mod crt;
 pub mod log;
 pub mod win32;

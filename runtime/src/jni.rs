@@ -324,6 +324,14 @@ fn run_game_library(path: CString, pdir: &str, gdir: &str, image_base: u64, imag
     install_import_resolver(handle, &pdir, &gdir);
 
     let mut cpu = GowCpu::new(image_base, image_size as usize);
+    // Load the PE image (sections) into the guest memory mapped at the original
+    // base, so absolute addresses in the recompiled code are valid.
+    let exe_path = format!("{gdir}/GodOfWar/GoW.exe");
+    let exe_path = if std::path::Path::new(&exe_path).exists() { exe_path } else { format!("{gdir}/GoW.exe") };
+    match crate::pe_load::load_into(&exe_path, cpu.image, cpu.image_size as usize) {
+        Some(_) => crate::glog!("[gow] PE image loaded from {exe_path}"),
+        None => crate::glog!("[gow] WARNING: could not load PE image at {exe_path}"),
+    }
     crate::glog!("[gow] entry=0x{entry_rva:x} running");
     unsafe { crate::dispatch::gow_run(cpu.as_mut() as *mut GowCpu, entry_rva) };
     crate::glog!("[gow] returned from entry (unimpl hits reported above)");
