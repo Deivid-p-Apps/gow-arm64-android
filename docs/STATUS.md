@@ -1,52 +1,58 @@
 # STATUS
 
-## Fase atual: M0/M1 — análise do executável e recompilador estático funcional
+## Fase atual: M1 em andamento — runtime host executa código recompilado; APK no CI
 
 ### O que é este projeto
 Recompilação estática (AOT) do executável x86-64 do God of War (2018) PC para
 aarch64 (Android), em Rust. Sem JIT, sem Wine, sem emulador em tempo de execução.
 O código do jogo é traduzido para C em tempo de build, compilado para arm64 e roda nativo.
 
-### Alvo (medido)
-- Binário: `GoW.exe`, PE32+ x86-64, image_base `0x140000000`, entry `0x3ec680`
-- `.text` = 0x00d46600 (~13.9 MB), **51.869 funções** na tabela `.pdata`
-- Imports: `d3d11.dll`, `dxgi.dll`, `D3DCOMPILER_47.dll`, `dinput8`, `xinput1_4`,
-  `steam_api64.dll`, `bink2w64.dll`, `kernel32`, `user32`, `advapi32`, `ws2_32`,
-  `bcrypt`, `crypt32`, `ole32`, `setupapi`, `rpcrt4`, e o CRT (api-ms-win-crt-*)
-- Exports: 61. TLS callbacks: presentes.
-- APIs Sony (`libSceGnm`, `libScePad`, `libSceJobManager`, `libSceGpuAddress`) aparecem
-  nos imports desta cópia — é a build de PC com camada de compatibilidade; ver NOTES.md.
+### Alvo (medido no GoW.exe real)
+- PE32+ x86-64, image_base `0x140000000`, entry `0x3ec680`
+- `.text` = ~13.9 MB; **51.869 funções** na tabela `.pdata`; TLS callbacks presentes
+- 7 seções, 579 imports, 61 exports
+- Imports-chave: `d3d11`, `dxgi`, `D3DCOMPILER_47`, `xinput1_4`, `steam_api64`,
+  `bink2w64`, `kernel32`, `user32`, `advapi32`, `ws2_32`, `bcrypt`, `crypt32`,
+  `ole32`, `setupapi`, `rpcrt4`, CRTs. Camada Sony: `libSceGnm/Pad/JobManager/GpuAddress`.
 
 ### Dispositivo de teste (ADB)
-Motorola Edge 30 Fusion (`tundra`), SM8350 (Snapdragon 888+), Adreno 725 (Turnip disponível),
-~7.5 GB RAM, Android 14, tela 1080x2400 até 144 Hz.
+Motorola Edge 30 Fusion (`tundra`), SM8350 (Snapdragon 888+), Adreno 725 (Turnip),
+~7.5 GB RAM, Android 14, 1080x2400 @ até 144 Hz.
 
-### O que funciona hoje (verificável)
-- [x] `tools/pe_probe.py`: análise de PE (headers, seções, imports, exports, .pdata, TLS)
-- [x] `recompiler`: parser PE32+ completo (sections/imports/exports/IAT/pdata/TLS)
-- [x] `recompiler`: descoberta de funções por `.pdata` + entry + TLS callbacks
-- [x] `recompiler`: lifter x86-64 -> C movido por iced-x86
-- [x] Execução real: 51.869 funções, 2.756.013 instruções geradas em `generated/gow_game.c`
-- [x] `runtime`: dispatcher (`gow_call`/`gow_call_indirect`/`gow_ret`), arquivo de registradores,
-      memória guest mapeada no image base original, gow_setflags, gow_load/store
-- [x] Relatório de cobertura de mnemonics (falha alto, nunca silencioso)
+### O que funciona (verificável)
+- [x] `tools/pe_probe.py`: análise de PE
+- [x] `recompiler`: parser PE32+ (sections/IAT/exports/.pdata/TLS)
+- [x] `recompiler`: descoberta de funções (`.pdata` + entry + TLS callbacks)
+- [x] `recompiler`: lifter x86-64 -> C (iced-x86)
+- [x] **Lift completo: 51.869 funções, 2.750.564 instruções; cobertura 99,97%**
+      (867 traps restantes). Gera 35 shards `gow_shard_NNN.c` + `gow_table.c`
+- [x] **C gerado compila de verdade** com `clang -O2` (shards testados, 0 erros)
+- [x] `runtime`: dispatch loop exato (call/ret/jmp/jcc), arquivo de registradores,
+      memória guest no image base original, flags exatas (add/sub/logic), shifts,
+      SSE/SSE2/AVX subset, MMX aliasing, conversões, comparações, string ops
+- [x] `runtime`: camada Win32/NT (resolver de imports por IAT; kernel32 core) +
+      stubs Steamworks / Sony / XInput
+- [x] `runtime`/`jni.rs`: carrega o `.so` do jogo (do usuário), registra a tabela, roda
+- [x] `android/`: projeto Gradle, MANIFEST com MANAGE_EXTERNAL_STORAGE, SurfaceView,
+      loader de driver Turnip/adrenotools em C (JNI)
+- [x] CI: build do recompilador + APK debug como artifact
+- [x] Testes: semântica de flags e condition codes
 
-### O que falta (grande)
-- [ ] Lifter: cobertura de 292 mnemônicos ainda não implementados (SSE/SSE2+, cmov, bit ops,
-      adc/sbb, string ops, x87, AVX) — ver `lift.log`
-- [ ] Ordenação de memória x86 (TSO) vs ARM: usar ld.acquire/st.release para memória compartilhada
-- [ ] Camada Win32/NT (kernel32/ntdll/user32/... -> Bionic)
-- [ ] D3D11 -> Vulkan (DXVK Native no APK, fase 1; backend Vulkan nativo em Rust, fase 2)
-- [ ] Áudio (XAudio2 -> AAudio/Oboe), entrada (XInput -> Android), janela (ANativeWindow)
-- [ ] Empacotamento do APK e loop CI -> artifact -> `adb install` -> medição
+### O que falta
+- [ ] Completar os 69 mnemônicos restantes (SSE antigos: unpck/psll/psrl/pshufb/haddps/
+      pextrw/insertps/roundps/blendps; x87; port I/O)
+- [ ] Comportamento da camada Win32 além do núcleo kernel32 (arquivos mapeados para
+      /storage/emulated/0/god, threads, sincronização, timers)
+- [ ] D3D11 -> Vulkan (DXVK Native numa fase 1; backend nativo em Rust na fase 2)
+- [ ] Áudio (XAudio2 -> AAudio/Oboe), entrada (XInput -> Android), swapchain (ANativeWindow)
+- [ ] Baixar artifact do CI e testar no dispositivo via ADB (install/logcat/medição)
 
 ## Bugs conhecidos
-- `gow_setflags` ainda não calcula CF/OF corretamente para adc/sbb/inc/dec (placeholder conservador).
-- `gow_jump`/`gow_ret` ainda não retomam o fluxo de controle real (faltam setjmp/estado de PC).
-- Funções regulares dentro de `.pdata` OK; jump tables relativas a RIP não roteadas ainda.
+- 867 instruções viram `gow_unimpl` (registradas, nunca silenciosas).
+- Jump tables ambíguas (jmp [table+idx*8]) precisam do mapa de ponteiros resolvido.
+- Threads/SHE (SEH) ainda não modelados.
 
 ## Próximos passos
-1. Completar lift de SSE/SSE2 (a maior parte do código vetorizado do jogo) e cmov.
-2. Introduzir máquina de estados por bloco básico com função de retomada (para call/ret corretos).
-3. Começar a camada Win32 (kernel32 mínimo: VirtualAlloc, CreateThread, sync primitives).
-4. CI: workflow que compila o recompilador e roda contra um binário de teste sintético.
+1. Fechar a cobertura do lifter (69 mnemônicos).
+2. Camada Win32 de arquivos/threads/sincronização sobre Bionic.
+3. Começar o bridge D3D11->Vulkan e a swapchain.
