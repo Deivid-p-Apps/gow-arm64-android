@@ -1,0 +1,173 @@
+generated/gow_game.c:9:30: error: incomplete definition of type 'GowCpu' (aka 'struct GowCpu')
+    9 |   gow_push64(cpu, (uint64_t)(GOW_REG(cpu, rbx)));
+      |                              ^~~~~~~~~~~~~~~~~
+runtime/include/gow_guest.h:14:34: note: expanded from macro 'GOW_REG'
+   14 | #define GOW_REG(cpu, name) ((cpu)->gpr.name)
+      |                             ~~~~~^
+runtime/include/gow_guest.h:10:16: note: forward declaration of 'struct GowCpu'
+   10 | typedef struct GowCpu GowCpu;
+      |                ^
+generated/gow_game.c:11:19: error: incomplete definition of type 'GowCpu' (aka 'struct GowCpu')
+   11 |   { uint64_t _a = GOW_REG(cpu, rsp); uint64_t _b = 0x20ull; uint64_t _r = gow_sub64(cpu, _a, _b, 64); GOW_REG(cpu, rsp) = _r; }
+      |                   ^~~~~~~~~~~~~~~~~
+runtime/include/gow_guest.h:14:34: note: expanded from macro 'GOW_REG'
+   14 | #define GOW_REG(cpu, name) ((cpu)->gpr.name)
+      |                             ~~~~~^
+runtime/include/gow_guest.h:10:16: note: forward declaration of 'struct GowCpu'
+   10 | typedef struct GowCpu GowCpu;
+      |                ^
+generated/gow_game.c:11:103: error: incomplete definition of type 'GowCpu' (aka 'struct GowCpu')
+   11 |   { uint64_t _a = GOW_REG(cpu, rsp); uint64_t _b = 0x20ull; uint64_t _r = gow_sub64(cpu, _a, _b, 64); GOW_REG(cpu, rsp) = _r; }
+      |                                                                                                       ^~~~~~~~~~~~~~~~~
+runtime/include/gow_guest.h:14:34: note: expanded from macro 'GOW_REG'
+   14 | #define GOW_REG(cpu, name) ((cpu)->gpr.name)
+      |                             ~~~~~^
+runtime/include/gow_guest.h:10:16: note: forward declaration of 'struct GowCpu'
+   10 | typedef struct GowCpu GowCpu;
+      |                ^
+generated/gow_game.c:13:3: error: incomplete definition of type 'GowCpu' (aka 'struct GowCpu')
+   13 |   GOW_REG(cpu, rax) = 0x140d4e6d8ull;
+      |   ^~~~~~~~~~~~~~~~~
+runtime/include/gow_guest.h:14:34: note: expanded from macro 'GOW_REG'
+   14 | #define GOW_REG(cpu, name) ((cpu)->gpr.name)
+      |                             ~~~~~^
+runtime/include/gow_guest.h:10:16: note: forward declaration of 'struct GowCpu'
+   10 | typedef struct GowCpu GowCpu;
+      |                ^
+generated/gow_game.c:15:3: error: incomplete definition of type 'GowCpu' (aka 'struct GowCpu')
+   15 |   GOW_REG(cpu, rbx) = GOW_REG(cpu, rcx);
+      |   ^~~~~~~~~~~~~~~~~
+runtime/include/gow_guest.h:14:34: note: expanded from macro 'GOW_REG'
+   14 | #define GOW_REG(cpu, name) ((cpu)->gpr.name)
+      |                             ~~~~~^
+runtime/include/gow_guest.h:10:16: note: forward declaration of 'struct GowCpu'
+   10 | typedef struct GowCpu GowCpu;
+      |                ^
+generated/gow_game.c:15:23: error: incomplete definition of type 'GowCpu' (aka 'struct GowCpu')
+   15 |   GOW_REG(cpu, rbx) = GOW_REG(cpu, rcx);
+      |                       ^~~~~~~~~~~~~~~~~
+runtime/include/gow_guest.h:14:34: note: expanded from macro 'GOW_REG'
+   14 | #define GOW_REG(cpu, name) ((cpu)->gpr.name)
+      |                             ~~~~~^
+runtime/include/gow_guest.h:10:16: note: forward declaration of 'struct GowCpu'
+   10 | typedef struct GowCpu GowCpu;
+      |                ^
+generated/gow_game.c:17:19: error: incomplete definition of type 'GowCpu' (aka 'struct GowCpu')
+   17 |   { uint64_t _a = GOW_REG(cpu, rcx); uint64_t _b = 0x8ull; uint64_t _r = gow_add64(cpu, _a, _b, 64); GOW_REG(cpu, rcx) = _r; }
+      |                   ^~~~~~~~~~~~~~~~~
+runtime/include/gow_guest.h:14:34: note: expanded from macro 'GOW_REG'
+   14 | #define GOW_REG(cpu, name) ((cpu)->gpr.name)
+      |                             ~~~~~^
+runtime/include/gow_guest.h:10:16: note: forward declaration of 'struct GowCpu'
+   10 | typedef struct GowCpu GowCpu;
+      |                ^
+generated/gow_game.c:17:102: error: incomplete definition of type 'GowCpu' (aka 'struct GowCpu')
+   17 |   { uint64_t _a = GOW_REG(cpu, rcx); uint64_t _b = 0x8ull; uint64_t _r = gow_add64(cpu, _a, _b, 64); GOW_REG(cpu, rcx) = _r; }
+      |                                                                                                      ^~~~~~~~~~~~~~~~~
+runtime/include/gow_guest.h:14:34: note: expanded from macro 'GOW_REG'
+   14 | #define GOW_REG(cpu, name) ((cpu)->gpr.name)
+      |                             ~~~~~^
+runtime/include/gow_guest.h:10:16: note: forward declaration of 'struct GowCpu'
+   10 | typedef struct GowCpu GowCpu;
+      |                ^
+generated/gow_game.c:19:18: error: incomplete definition of type 'GowCpu' (aka 'struct GowCpu')
+   19 |   gow_store(cpu, GOW_REG(cpu, rcx) + 0xfffffffffffffff8ull, GOW_REG(cpu, rax), 1);
+      |                  ^~~~~~~~~~~~~~~~~
+runtime/include/gow_guest.h:14:34: note: expanded from macro 'GOW_REG'
+   14 | #define GOW_REG(cpu, name) ((cpu)->gpr.name)
+      |                             ~~~~~^
+runtime/include/gow_guest.h:10:16: note: forward declaration of 'struct GowCpu'
+   10 | typedef struct GowCpu GowCpu;
+      |                ^
+generated/gow_game.c:19:61: error: incomplete definition of type 'GowCpu' (aka 'struct GowCpu')
+   19 |   gow_store(cpu, GOW_REG(cpu, rcx) + 0xfffffffffffffff8ull, GOW_REG(cpu, rax), 1);
+      |                                                             ^~~~~~~~~~~~~~~~~
+runtime/include/gow_guest.h:14:34: note: expanded from macro 'GOW_REG'
+   14 | #define GOW_REG(cpu, name) ((cpu)->gpr.name)
+      |                             ~~~~~^
+runtime/include/gow_guest.h:10:16: note: forward declaration of 'struct GowCpu'
+   10 | typedef struct GowCpu GowCpu;
+      |                ^
+generated/gow_game.c:24:3: error: incomplete definition of type 'GowCpu' (aka 'struct GowCpu')
+   24 |   GOW_REG(cpu, rax) = GOW_REG(cpu, rbx);
+      |   ^~~~~~~~~~~~~~~~~
+runtime/include/gow_guest.h:14:34: note: expanded from macro 'GOW_REG'
+   14 | #define GOW_REG(cpu, name) ((cpu)->gpr.name)
+      |                             ~~~~~^
+runtime/include/gow_guest.h:10:16: note: forward declaration of 'struct GowCpu'
+   10 | typedef struct GowCpu GowCpu;
+      |                ^
+generated/gow_game.c:24:23: error: incomplete definition of type 'GowCpu' (aka 'struct GowCpu')
+   24 |   GOW_REG(cpu, rax) = GOW_REG(cpu, rbx);
+      |                       ^~~~~~~~~~~~~~~~~
+runtime/include/gow_guest.h:14:34: note: expanded from macro 'GOW_REG'
+   14 | #define GOW_REG(cpu, name) ((cpu)->gpr.name)
+      |                             ~~~~~^
+runtime/include/gow_guest.h:10:16: note: forward declaration of 'struct GowCpu'
+   10 | typedef struct GowCpu GowCpu;
+      |                ^
+generated/gow_game.c:26:19: error: incomplete definition of type 'GowCpu' (aka 'struct GowCpu')
+   26 |   { uint64_t _a = GOW_REG(cpu, rsp); uint64_t _b = 0x20ull; uint64_t _r = gow_add64(cpu, _a, _b, 64); GOW_REG(cpu, rsp) = _r; }
+      |                   ^~~~~~~~~~~~~~~~~
+runtime/include/gow_guest.h:14:34: note: expanded from macro 'GOW_REG'
+   14 | #define GOW_REG(cpu, name) ((cpu)->gpr.name)
+      |                             ~~~~~^
+runtime/include/gow_guest.h:10:16: note: forward declaration of 'struct GowCpu'
+   10 | typedef struct GowCpu GowCpu;
+      |                ^
+generated/gow_game.c:26:103: error: incomplete definition of type 'GowCpu' (aka 'struct GowCpu')
+   26 |   { uint64_t _a = GOW_REG(cpu, rsp); uint64_t _b = 0x20ull; uint64_t _r = gow_add64(cpu, _a, _b, 64); GOW_REG(cpu, rsp) = _r; }
+      |                                                                                                       ^~~~~~~~~~~~~~~~~
+runtime/include/gow_guest.h:14:34: note: expanded from macro 'GOW_REG'
+   14 | #define GOW_REG(cpu, name) ((cpu)->gpr.name)
+      |                             ~~~~~^
+runtime/include/gow_guest.h:10:16: note: forward declaration of 'struct GowCpu'
+   10 | typedef struct GowCpu GowCpu;
+      |                ^
+generated/gow_game.c:28:3: error: incomplete definition of type 'GowCpu' (aka 'struct GowCpu')
+   28 |   GOW_REG(cpu, rbx) = gow_pop64(cpu);
+      |   ^~~~~~~~~~~~~~~~~
+runtime/include/gow_guest.h:14:34: note: expanded from macro 'GOW_REG'
+   14 | #define GOW_REG(cpu, name) ((cpu)->gpr.name)
+      |                             ~~~~~^
+runtime/include/gow_guest.h:10:16: note: forward declaration of 'struct GowCpu'
+   10 | typedef struct GowCpu GowCpu;
+      |                ^
+generated/gow_game.c:35:30: error: incomplete definition of type 'GowCpu' (aka 'struct GowCpu')
+   35 |   gow_push64(cpu, (uint64_t)(GOW_REG(cpu, rbx)));
+      |                              ^~~~~~~~~~~~~~~~~
+runtime/include/gow_guest.h:14:34: note: expanded from macro 'GOW_REG'
+   14 | #define GOW_REG(cpu, name) ((cpu)->gpr.name)
+      |                             ~~~~~^
+runtime/include/gow_guest.h:10:16: note: forward declaration of 'struct GowCpu'
+   10 | typedef struct GowCpu GowCpu;
+      |                ^
+generated/gow_game.c:37:19: error: incomplete definition of type 'GowCpu' (aka 'struct GowCpu')
+   37 |   { uint64_t _a = GOW_REG(cpu, rsp); uint64_t _b = 0x20ull; uint64_t _r = gow_sub64(cpu, _a, _b, 64); GOW_REG(cpu, rsp) = _r; }
+      |                   ^~~~~~~~~~~~~~~~~
+runtime/include/gow_guest.h:14:34: note: expanded from macro 'GOW_REG'
+   14 | #define GOW_REG(cpu, name) ((cpu)->gpr.name)
+      |                             ~~~~~^
+runtime/include/gow_guest.h:10:16: note: forward declaration of 'struct GowCpu'
+   10 | typedef struct GowCpu GowCpu;
+      |                ^
+generated/gow_game.c:37:103: error: incomplete definition of type 'GowCpu' (aka 'struct GowCpu')
+   37 |   { uint64_t _a = GOW_REG(cpu, rsp); uint64_t _b = 0x20ull; uint64_t _r = gow_sub64(cpu, _a, _b, 64); GOW_REG(cpu, rsp) = _r; }
+      |                                                                                                       ^~~~~~~~~~~~~~~~~
+runtime/include/gow_guest.h:14:34: note: expanded from macro 'GOW_REG'
+   14 | #define GOW_REG(cpu, name) ((cpu)->gpr.name)
+      |                             ~~~~~^
+runtime/include/gow_guest.h:10:16: note: forward declaration of 'struct GowCpu'
+   10 | typedef struct GowCpu GowCpu;
+      |                ^
+generated/gow_game.c:39:3: error: incomplete definition of type 'GowCpu' (aka 'struct GowCpu')
+   39 |   GOW_REG(cpu, rax) = 0x140d4e6d8ull;
+      |   ^~~~~~~~~~~~~~~~~
+runtime/include/gow_guest.h:14:34: note: expanded from macro 'GOW_REG'
+   14 | #define GOW_REG(cpu, name) ((cpu)->gpr.name)
+      |                             ~~~~~^
+runtime/include/gow_guest.h:10:16: note: forward declaration of 'struct GowCpu'
+   10 | typedef struct GowCpu GowCpu;
+      |                ^
+fatal error: too many errors emitted, stopping now [-ferror-limit=]
+20 errors generated.

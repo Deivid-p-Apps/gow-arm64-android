@@ -7,7 +7,8 @@
  * central dispatch loop in gow_run(). This makes call/ret/tail-jmp exact. */
 #include <stdint.h>
 
-typedef struct GowCpu GowCpu;
+#include "gow_cpu.h"
+
 typedef void (*GowFunc)(GowCpu*);
 
 /* Register access into the flat 64-bit GPR file. */

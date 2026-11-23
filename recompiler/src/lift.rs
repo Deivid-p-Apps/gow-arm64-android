@@ -206,6 +206,12 @@ pub fn lift(pe: &PeImage, out_dir: &std::path::Path) -> Result<LiftOutput> {
     let mut unimpl: BTreeSet<String> = BTreeSet::new();
     let mut unimpl_instances: u64 = 0;
 
+    // Build IAT slot map: VA of each IAT slot -> import index.
+    let mut iat: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+    for (i, imp) in pe.imports.iter().enumerate() {
+        iat.insert(imp.iat_rva, i as u32);
+    }
+
     for &entry_rva in &entries {
         let range_end = pe
             .pdata_functions
@@ -230,7 +236,7 @@ pub fn lift(pe: &PeImage, out_dir: &std::path::Path) -> Result<LiftOutput> {
             let mut text = String::new();
             fmt.format(&insn, &mut text);
             writeln!(c, "  /* 0x{rva:x}: {text} */")?;
-            if emit(&mut c, &insn, image_base, &mut unimpl, &mut unimpl_instances)? {
+            if emit(&mut c, &insn, image_base, &iat, &mut unimpl, &mut unimpl_instances)? {
                 // terminal (returned to loop)
             }
         }
@@ -261,7 +267,7 @@ fn trap(c: &mut String, insn: &Instruction, image_base: u64, unimpl: &mut BTreeS
 }
 
 /// Emit C for one instruction. Returns true if it ended the basic block.
-fn emit(c: &mut String, insn: &Instruction, image_base: u64, unimpl: &mut BTreeSet<String>, un: &mut u64) -> Result<bool> {
+fn emit(c: &mut String, insn: &Instruction, image_base: u64, iat: &std::collections::HashMap<u32,u32>, unimpl: &mut BTreeSet<String>, un: &mut u64) -> Result<bool> {
     use iced_x86::Mnemonic::*;
     let m = insn.mnemonic();
 
@@ -284,6 +290,17 @@ fn emit(c: &mut String, insn: &Instruction, image_base: u64, unimpl: &mut BTreeS
             if insn.op0_kind() == OpKind::NearBranch64 {
                 let t = (insn.near_branch64() - image_base) as u32;
                 writeln!(c, "  gow_call(cpu, 0x{t:x}u, 0x{ret:x}u); return;")?;
+            } else if insn.op0_kind() == OpKind::Memory {
+                // `call qword [rip+disp]` — usually an IAT import thunk.
+                let addr = mem_expr(insn, image_base);
+                if let Some(va) = mem_target_va(insn, image_base) {
+                    if let Some(slot_rva) = iat_slot(iat, va, image_base) {
+                        writeln!(c, "  gow_import_call(cpu, 0x{slot_rva:x}u); return;")?;
+                        return Ok(true);
+                    }
+                }
+                writeln!(c, "  gow_push64(cpu, 0x{ret:x}u);")?;
+                writeln!(c, "  gow_call_indirect(cpu, (uint64_t)({addr})); return;")?;
             } else {
                 // indirect call: push return, set next from value
                 writeln!(c, "  gow_push64(cpu, 0x{ret:x}u);")?;
@@ -598,9 +615,11 @@ fn emit(c: &mut String, insn: &Instruction, image_base: u64, unimpl: &mut BTreeS
     // --- misc ---
     match m {
         Cdq | Cqo => {
-            let w = if m == Cdq { 32 } else { 64 };
-            let sign = format!("(((int64_t)GOW_REG(cpu, rax) >> {}) & ((1ull<<{})-1))", w - 1, w);
-            writeln!(c, "  GOW_REG(cpu, rdx) = {sign};")?;
+            if m == Cdq {
+                writeln!(c, "  GOW_REG(cpu, rdx) = (GOW_REG(cpu, rax) & 0x80000000ull) ? 0xffffffffull : 0ull;")?;
+            } else {
+                writeln!(c, "  GOW_REG(cpu, rdx) = ((int64_t)GOW_REG(cpu, rax) < 0) ? 0xffffffffffffffffull : 0ull;")?;
+            }
             return Ok(false);
         }
         Cdqe => { writeln!(c, "  GOW_REG(cpu, rax) = (int64_t)(int32_t)(uint32_t)GOW_REG(cpu, rax);")?; return Ok(false); }
@@ -629,6 +648,19 @@ fn emit(c: &mut String, insn: &Instruction, image_base: u64, unimpl: &mut BTreeS
 
 fn shift_id(op: &str) -> u32 {
     match op { "shl" => 0, "shr" => 1, "sar" => 2, "rol" => 3, "ror" => 4, _ => 0 }
+}
+
+/// If `insn` is `call/jmp [rip+disp]`, return the absolute VA of the slot.
+fn mem_target_va(insn: &Instruction, _image_base: u64) -> Option<u64> {
+    if insn.memory_base() != Register::RIP { return None; }
+    Some(insn.memory_displacement64())
+}
+
+/// Look up which import index a memory target VA refers to, via the IAT map.
+fn iat_slot(iat: &std::collections::HashMap<u32, u32>, va: u64, image_base: u64) -> Option<u32> {
+    if va < image_base { return None; }
+    let rva = (va - image_base) as u32;
+    iat.get(&rva).copied()
 }
 
 fn emit_sse(insn: &Instruction, image_base: u64) -> Option<String> {
