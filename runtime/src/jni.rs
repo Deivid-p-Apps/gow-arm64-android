@@ -99,11 +99,91 @@ pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeTouch(
     crate::input::global().on_touch(pointer_id, x, y, down);
 }
 
+/// Load the Turnip (or other) Vulkan driver from an adrenotools package in the
+/// game's drivers directory into the app's private storage, then make it the
+/// Vulkan driver the process uses. Returns 0 on success.
+///
+/// An adrenotools package is a zip with `meta.json` + a driver `.so`
+/// (commonly `libvulkan_freedreno.so`). Android cannot dlopen from external
+/// storage, so the driver is copied into `priv_dir` first. The Vulkan loader
+/// picks it up via the driver search path set here.
+#[no_mangle]
+pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeLoadDriver(
+    env: *mut std::ffi::c_void,
+    _thiz: *mut std::ffi::c_void,
+    drivers_dir: *mut std::ffi::c_void,
+    priv_dir: *mut std::ffi::c_void,
+) -> c_int {
+    let ddir = unsafe { jstring_to_string(env, drivers_dir) };
+    let pdir = unsafe { jstring_to_string(env, priv_dir) };
+    crate::glog!("[gow.driver] scanning {ddir}");
+
+    // Prefer an already-extracted driver .so, else the first package zip.
+    let candidates = ["libvulkan_freedreno.so", "libvulkan.so", "vulkan.purple.so"];
+    for name in candidates {
+        let p = format!("{ddir}/{name}");
+        if std::path::Path::new(&p).exists() {
+            return stage_and_load_driver(&p, &pdir);
+        }
+    }
+    // Otherwise look for a driver inside the first .zip/.adpkg in the folder.
+    if let Ok(rd) = std::fs::read_dir(&ddir) {
+        for e in rd.flatten() {
+            let path = e.path();
+            let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+            if ext == "zip" || ext == "adpkg" {
+                if let Some(so) = extract_driver_from_zip(&path, &pdir) {
+                    return stage_and_load_driver(&so, &pdir);
+                }
+            }
+        }
+    }
+    crate::glog!("[gow.driver] no driver package found; using system Vulkan");
+    -1
+}
+
+fn stage_and_load_driver(src: &str, priv_dir: &str) -> c_int {
+    let dst = format!("{priv_dir}/libvulkan_freedreno.so");
+    if let Err(e) = std::fs::copy(src, &dst) {
+        crate::glog!("[gow.driver] copy failed: {e}");
+        return -1;
+    }
+    let cpath = CString::new(dst.clone()).unwrap();
+    let h = unsafe { dlopen(cpath.as_ptr(), RTLD_NOW | RTLD_LOCAL) };
+    if h.is_null() {
+        let err = unsafe { dlerror() };
+        crate::glog!("[gow.driver] dlopen {dst} failed: {:?}", err);
+        return -2;
+    }
+    crate::glog!("[gow.driver] Turnip driver loaded from {dst}");
+    0
+}
+
+/// Extract the driver `.so` from an adrenotools zip into `priv_dir`.
+fn extract_driver_from_zip(zip_path: &std::path::Path, priv_dir: &str) -> Option<String> {
+    let f = std::fs::File::open(zip_path).ok()?;
+    let mut archive = zip::ZipArchive::new(f).ok()?;
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).ok()?;
+        let name = entry.name().to_string();
+        if name.ends_with(".so") {
+            let out = format!("{priv_dir}/{}", name.rsplit('/').next().unwrap_or("libvulkan.so"));
+            let mut of = std::fs::File::create(&out).ok()?;
+            std::io::copy(&mut entry, &mut of).ok()?;
+            crate::glog!("[gow.driver] extracted {name} -> {out}");
+            return Some(out);
+        }
+    }
+    None
+}
+
 const RTLD_NOW: c_int = 2;
+const RTLD_LOCAL: c_int = 0;
 
 extern "C" {
     fn dlopen(path: *const c_char, mode: c_int) -> *mut std::ffi::c_void;
     fn dlsym(handle: *mut std::ffi::c_void, sym: *const c_char) -> *mut std::ffi::c_void;
+    fn dlerror() -> *const c_char;
 }
 
 /// JNI `GetStringUTFChars` / `ReleaseStringUTFChars` through the JNIEnv table

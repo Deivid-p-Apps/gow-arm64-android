@@ -363,3 +363,81 @@ pub unsafe extern "C" fn gow_xmm_permilps(cpu: *mut GowCpu, dst: i32, src: i32, 
     c.xmm[dst as usize].0[0] = o[0] as u64 | (o[1] as u64) << 32;
     c.xmm[dst as usize].0[1] = o[2] as u64 | (o[3] as u64) << 32;
 }
+
+/// ADDSUBPS (SSE3): even lanes subtract, odd lanes add.
+#[no_mangle]
+pub unsafe extern "C" fn gow_xmm_addsubps(cpu: *mut GowCpu, dst: i32, src: i32) {
+    let c = &mut *cpu;
+    let a = crate::dispatch::LANES32(c.xmm[dst as usize].0);
+    let b = crate::dispatch::LANES32(c.xmm[src as usize].0);
+    let mut o = [0u32; 4];
+    for i in 0..4 {
+        let x = f32::from_bits(a[i]);
+        let y = f32::from_bits(b[i]);
+        let r = if i % 2 == 0 { x - y } else { x + y };
+        o[i] = r.to_bits();
+    }
+    c.xmm[dst as usize].0[0] = o[0] as u64 | (o[1] as u64) << 32;
+    c.xmm[dst as usize].0[1] = o[2] as u64 | (o[3] as u64) << 32;
+}
+
+/// PALIGNR: concatenate dst (high) and src (low) into 32 bytes, shift the pair
+/// right by `imm` bytes and keep the low 16.
+#[no_mangle]
+pub unsafe extern "C" fn gow_xmm_palignr(cpu: *mut GowCpu, dst: i32, src: i32, imm: u32) {
+    let c = &mut *cpu;
+    let d = c.xmm[dst as usize].0;
+    let s = c.xmm[src as usize].0;
+    let mut cat = [0u8; 32];
+    cat[0..8].copy_from_slice(&s[0].to_le_bytes());
+    cat[8..16].copy_from_slice(&s[1].to_le_bytes());
+    cat[16..24].copy_from_slice(&d[0].to_le_bytes());
+    cat[24..32].copy_from_slice(&d[1].to_le_bytes());
+    let mut out = [0u8; 16];
+    let sh = (imm & 0xff) as usize;
+    if sh < 32 {
+        for i in 0..16 {
+            out[i] = if i + sh < 32 { cat[i + sh] } else { 0 };
+        }
+    }
+    c.xmm[dst as usize].0[0] = u64::from_le_bytes(out[0..8].try_into().unwrap());
+    c.xmm[dst as usize].0[1] = u64::from_le_bytes(out[8..16].try_into().unwrap());
+}
+
+/// RCL/RCR: rotate `v` (size_bits: 8/16/32/64) through carry, updating CF and,
+/// for a single-bit rotate, OF. Count is masked to 5/6 bits per x86 rules.
+/// `right` != 0 selects RCR. Returns the new operand value.
+#[no_mangle]
+pub unsafe extern "C" fn gow_rcl_rcr(cpu: *mut GowCpu, v: u64, count: u64, size_bits: u32, right: u32) -> u64 {
+    use crate::dispatch::{CF, OF};
+    let bits = size_bits.clamp(8, 64);
+    let mask: u64 = if bits == 64 { u64::MAX } else { (1u64 << bits) - 1 };
+    let n = count & if bits == 64 { 0x3f } else { 0x1f };
+    let c = &mut *cpu;
+    if n == 0 {
+        return v & mask; // zero-bit rotate changes no flags
+    }
+    let cf_in = if c.flags & CF != 0 { 1u128 } else { 0u128 };
+    let width = bits + 1;
+    let m = (1u128 << width) - 1;
+    let mut q = (cf_in << bits) | (v as u128 & mask as u128);
+    let sh = (n % width) as u32;
+    q = if right != 0 {
+        ((q >> sh) | (q << (width - sh))) & m
+    } else {
+        ((q << sh) | (q >> (width - sh))) & m
+    };
+    let result = (q as u64) & mask;
+    let cf_out = ((q >> bits) & 1) as u64;
+    c.flags = (c.flags & !(CF | OF)) | (if cf_out != 0 { CF } else { 0 });
+    if n == 1 {
+        let msb = (result >> (bits - 1)) & 1;
+        let of = if right != 0 {
+            msb ^ ((result >> (bits - 2)) & 1)
+        } else {
+            msb ^ cf_out
+        };
+        if of != 0 { c.flags |= OF; }
+    }
+    result
+}

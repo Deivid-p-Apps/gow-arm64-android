@@ -22,6 +22,7 @@ public class GowActivity extends Activity implements SurfaceHolder.Callback {
     static { System.loadLibrary("gow_runtime"); }
 
     private native int nativeInit(String gameDir);
+    private native int nativeLoadDriver(String driversDir, String privDir);
     private native int nativeLoadAndRun(String gameDir, String privDir,
                                         long imageBase, long imageSize, int entryRva);
     private native void nativeSurfaceCreated(Surface surface);
@@ -51,6 +52,13 @@ public class GowActivity extends Activity implements SurfaceHolder.Callback {
         final long IMAGE_SIZE = 0x519f000L;
         final int ENTRY_RVA = 0x3ec680;
         String privDir = getApplicationInfo().nativeLibraryDir;
+
+        // Load a custom Vulkan driver (Turnip) from the drivers folder before
+        // bringing up Vulkan, so the swapchain uses it.
+        String driversDir = new java.io.File(godDir, "drivers").getAbsolutePath();
+        int dr = nativeLoadDriver(driversDir, privDir);
+        Log.i(TAG, "nativeLoadDriver returned " + dr);
+
         int rc = nativeLoadAndRun(godDir.getAbsolutePath(), privDir, IMAGE_BASE, IMAGE_SIZE, ENTRY_RVA);
         Log.i(TAG, "nativeLoadAndRun returned " + rc);
     }
