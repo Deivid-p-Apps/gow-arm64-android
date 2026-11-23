@@ -18,16 +18,18 @@ pub struct ImportResolver {
     /// IAT slot RVA -> (dll, function)
     pub slot_to_import: HashMap<u32, (String, String)>,
     pub files: crate::fileio::FileTable,
+    /// Set once the D3D11 backend (DXVK Native) is loaded: dll -> handle.
+    pub graphics: crate::graphics::GraphicsBridge,
 }
 
 static MISSING: AtomicU64 = AtomicU64::new(0);
 
 impl ImportResolver {
     pub fn new(game_dir: &str) -> Self {
-        Self { slot_to_import: HashMap::new(), files: crate::fileio::FileTable::new(game_dir) }
+        Self { slot_to_import: HashMap::new(), files: crate::fileio::FileTable::new(game_dir), graphics: crate::graphics::GraphicsBridge::new() }
     }
     pub fn new_host() -> Self {
-        Self { slot_to_import: HashMap::new(), files: crate::fileio::FileTable::new("/storage/emulated/0/god") }
+        Self { slot_to_import: HashMap::new(), files: crate::fileio::FileTable::new("/storage/emulated/0/god"), graphics: crate::graphics::GraphicsBridge::new() }
     }
 
     pub fn register(&mut self, iat_rva: u32, dll: &str, func: &str) {
