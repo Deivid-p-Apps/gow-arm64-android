@@ -148,10 +148,77 @@ pub unsafe fn call(cpu: *mut GowCpu, func: &str) -> bool {
             if a0 != 0 { *(a0 as *mut i64) = t as i64; }
             t
         }
+        // --- C/C++ startup: run static initializers (the path to main) ---
+        "_initterm" | "_initterm_e" => {
+            let mut p = a0;
+            let end = a1;
+            let mut count = 0u64;
+            while p + 8 <= end {
+                let fva = *(p as *const u64);
+                if fva != 0 {
+                    call_guest(cpu, fva);
+                    count += 1;
+                }
+                p += 8;
+            }
+            crate::glog!("[gow.crt] _initterm ran {count} initializers");
+            0
+        }
+        "_crt_atexit" | "atexit" | "_register_onexit_function" | "_execute_onexit_table"
+        | "_initialize_onexit_table" | "_crt_at_quick_exit" => 0,
+        "_set_app_type" | "_set_abort_behavior" | "_set_invalid_parameter_handler"
+        | "_set_purecall_handler" | "set_terminate" | "set_unexpected"
+        | "_controlfp" | "_set_new_mode" | "_configthreadlocale" => 0,
+        "_getpid" => std::process::id() as u64,
+        "_beginthreadex" => { spawn_guest_thread(cpu, a2, a3); 0x1234 }
+        "_endthreadex" | "_cexit" | "_c_exit" | "exit" | "_exit" => 0,
+        "_get_narrow_winmain_command_line" => {
+            let s = b"GoW.exe\0";
+            let p = crate::win32::host_alloc(s.len());
+            std::ptr::copy_nonoverlapping(s.as_ptr(), p, s.len());
+            p as u64
+        }
+        "_initialize_narrow_environment" | "_configure_narrow_argv" => 0,
+        "_invalid_parameter_noinfo" | "_invalid_parameter_noinfo_noreturn" => 0,
+        "_seh_filter_exe" | "_seh_filter_dll" => 0,
+        "__sys_nerr" => 0,
+        "__acrt_iob_func" => 0x0000_0c00_0000_0000 + a0 * 0x100, // stable fake FILE*
+        "__C_specific_handler" | "__CxxFrameHandler3" => return false, // SEH/C++ exceptions unimplemented
         _ => return false,
     };
     c.gpr.rax = ret;
     true
+}
+
+/// Call a guest function by absolute VA, running it to completion through the
+/// dispatcher. Used by `_initterm` to run the game's static initializers.
+unsafe fn call_guest(cpu: *mut GowCpu, va: u64) {
+    let c = &mut *cpu;
+    if va >= c.image_base && va < c.image_base + c.image_size {
+        let rva = (va - c.image_base) as u32;
+        // Recursively drive the guest function; it returns via gow_ret to a
+        // sentinel we push here.
+        crate::dispatch::gow_run(cpu, rva);
+    }
+}
+
+/// Spawn a guest thread that runs the function at `start_va` with `arg` in RCX.
+unsafe fn spawn_guest_thread(cpu: *mut GowCpu, start_va: u64, arg: u64) {
+    let c = &*cpu;
+    if start_va < c.image_base || start_va >= c.image_base + c.image_size {
+        return;
+    }
+    let rva = (start_va - c.image_base) as u32;
+    let base = c.image_base;
+    let size = c.image_size as usize;
+    let map: Vec<(u32, crate::dispatch::GowFunc)> = c.func_map.iter().map(|(k, v)| (*k, *v)).collect();
+    std::thread::spawn(move || {
+        let mut cpu = GowCpu::new(base, size);
+        for (r, f) in map { cpu.func_map.insert(r, f); }
+        cpu.gpr.rcx = arg;
+        crate::glog!("[gow.crt] _beginthreadex start rva=0x{rva:x}");
+        unsafe { crate::dispatch::gow_run(cpu.as_mut() as *mut GowCpu, rva) };
+    });
 }
 
 fn cstr(ptr: u64) -> String {
