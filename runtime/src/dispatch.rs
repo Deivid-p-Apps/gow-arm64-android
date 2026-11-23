@@ -48,6 +48,7 @@ impl Default for Xmm { fn default() -> Self { Xmm([0, 0]) } }
 pub struct GowCpu {
     pub gpr: Gprs,
     pub xmm: [Xmm; 17],  // XMM0..15 plus index 16 as a scratch
+    pub fpu: crate::x87::Fpu,
 
     pub rip: u64,
     pub flags: u64,
@@ -76,6 +77,11 @@ unsafe impl Send for GowCpu {}
 
 pub const STOP_RVA: u32 = u32::MAX;
 
+#[inline]
+pub fn LANES32(v: [u64; 2]) -> [u32; 4] {
+    [v[0] as u32, (v[0] >> 32) as u32, v[1] as u32, (v[1] >> 32) as u32]
+}
+
 /// Function table emitted by the recompiler (gow_game.c) is registered at
 /// startup via `install_registry`, so no extern symbol is required here.
 
@@ -91,6 +97,7 @@ impl GowCpu {
         Box::new(GowCpu {
             gpr: Gprs { rsp, ..Default::default() },
             xmm: [Xmm::default(); 17],
+            fpu: crate::x87::Fpu::default(),
             rip: 0,
             flags: 0,
             mxcsr: 0x1f80,

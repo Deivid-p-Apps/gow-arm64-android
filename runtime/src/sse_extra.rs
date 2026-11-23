@@ -221,3 +221,112 @@ pub unsafe extern "C" fn gow_xmm_pmovsx(cpu: *mut GowCpu, dst: i32, src: i32, si
     c.xmm[dst as usize].0[0] = out[0] as u64 | (out[1] as u64) << 32;
     c.xmm[dst as usize].0[1] = out[2] as u64 | (out[3] as u64) << 32;
 }
+
+#[no_mangle]
+pub unsafe extern "C" fn gow_xmm_punpck32(cpu: *mut GowCpu, dst: i32, src: i32, elem: u32, hi: u32) {
+    let _ = elem;
+    let c = &mut *cpu;
+    let a = crate::dispatch::LANES32(c.xmm[dst as usize].0);
+    let b = crate::dispatch::LANES32(c.xmm[src as usize].0);
+    let base = if hi != 0 { 2 } else { 0 };
+    let r0 = a[base]; let r1 = b[base]; let r2 = a[base + 1]; let r3 = b[base + 1];
+    c.xmm[dst as usize].0[0] = r0 as u64 | (r1 as u64) << 32;
+    c.xmm[dst as usize].0[1] = r2 as u64 | (r3 as u64) << 32;
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn gow_xmm_punpck_wd(cpu: *mut GowCpu, dst: i32, src: i32, hi: u32) {
+    let c = &mut *cpu;
+    let mut da = [0u8; 16];
+    let mut db = [0u8; 16];
+    da[0..8].copy_from_slice(&c.xmm[dst as usize].0[0].to_le_bytes());
+    da[8..16].copy_from_slice(&c.xmm[dst as usize].0[1].to_le_bytes());
+    db[0..8].copy_from_slice(&c.xmm[src as usize].0[0].to_le_bytes());
+    db[8..16].copy_from_slice(&c.xmm[src as usize].0[1].to_le_bytes());
+    let base = if hi != 0 { 8 } else { 0 };
+    let mut out = [0u8; 16];
+    for i in 0..4 {
+        out[i * 4..i * 4 + 2].copy_from_slice(&da[base + i * 2..base + i * 2 + 2]);
+        out[i * 4 + 2..i * 4 + 4].copy_from_slice(&db[base + i * 2..base + i * 2 + 2]);
+    }
+    c.xmm[dst as usize].0[0] = u64::from_le_bytes(out[0..8].try_into().unwrap());
+    c.xmm[dst as usize].0[1] = u64::from_le_bytes(out[8..16].try_into().unwrap());
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn gow_xmm_punpck_qdq(cpu: *mut GowCpu, dst: i32, src: i32, hi: u32) {
+    let c = &mut *cpu;
+    let a = c.xmm[dst as usize].0;
+    let b = c.xmm[src as usize].0;
+    let r0 = if hi != 0 { a[1] } else { a[0] };
+    let r1 = if hi != 0 { b[1] } else { b[0] };
+    c.xmm[dst as usize].0 = [r0, r1];
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn gow_xmm_movshdup(cpu: *mut GowCpu, reg: i32) {
+    let c = &mut *cpu;
+    let a = crate::dispatch::LANES32(c.xmm[reg as usize].0);
+    let o = [a[1], a[1], a[3], a[3]];
+    c.xmm[reg as usize].0[0] = o[0] as u64 | (o[1] as u64) << 32;
+    c.xmm[reg as usize].0[1] = o[2] as u64 | (o[3] as u64) << 32;
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn gow_xmm_movsldup(cpu: *mut GowCpu, reg: i32) {
+    let c = &mut *cpu;
+    let a = crate::dispatch::LANES32(c.xmm[reg as usize].0);
+    let o = [a[0], a[0], a[2], a[2]];
+    c.xmm[reg as usize].0[0] = o[0] as u64 | (o[1] as u64) << 32;
+    c.xmm[reg as usize].0[1] = o[2] as u64 | (o[3] as u64) << 32;
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn gow_xmm_hadd(cpu: *mut GowCpu, dst: i32, src: i32) {
+    let c = &mut *cpu;
+    let a = crate::dispatch::LANES32(c.xmm[dst as usize].0);
+    let b = crate::dispatch::LANES32(c.xmm[src as usize].0);
+    let ax: [f32; 4] = [f32::from_bits(a[0]), f32::from_bits(a[1]), f32::from_bits(a[2]), f32::from_bits(a[3])];
+    let bx: [f32; 4] = [f32::from_bits(b[0]), f32::from_bits(b[1]), f32::from_bits(b[2]), f32::from_bits(b[3])];
+    let o = [ax[0] + ax[1], ax[2] + ax[3], bx[0] + bx[1], bx[2] + bx[3]];
+    c.xmm[dst as usize].0[0] = o[0].to_bits() as u64 | (o[1].to_bits() as u64) << 32;
+    c.xmm[dst as usize].0[1] = o[2].to_bits() as u64 | (o[3].to_bits() as u64) << 32;
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn gow_xmm_blendps(cpu: *mut GowCpu, dst: i32, src: i32, imm: u32) {
+    let c = &mut *cpu;
+    let a = crate::dispatch::LANES32(c.xmm[dst as usize].0);
+    let b = crate::dispatch::LANES32(c.xmm[src as usize].0);
+    let mut o = [0u32; 4];
+    for i in 0..4 { o[i] = if imm & (1 << i) != 0 { b[i] } else { a[i] }; }
+    c.xmm[dst as usize].0[0] = o[0] as u64 | (o[1] as u64) << 32;
+    c.xmm[dst as usize].0[1] = o[2] as u64 | (o[3] as u64) << 32;
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn gow_xmm_roundps(cpu: *mut GowCpu, reg: i32, imm: u32) {
+    let c = &mut *cpu;
+    let a = crate::dispatch::LANES32(c.xmm[reg as usize].0);
+    let mode = imm & 3;
+    let mut o = [0u32; 4];
+    for i in 0..4 {
+        let x = f32::from_bits(a[i]);
+        o[i] = match mode { 0 => x.round(), 1 => x.floor(), 2 => x.ceil(), _ => x.trunc() }.to_bits();
+    }
+    c.xmm[reg as usize].0[0] = o[0] as u64 | (o[1] as u64) << 32;
+    c.xmm[reg as usize].0[1] = o[2] as u64 | (o[3] as u64) << 32;
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn gow_xmm_insertps(cpu: *mut GowCpu, dst: i32, src: i32, imm: u32) {
+    let c = &mut *cpu;
+    let a = crate::dispatch::LANES32(c.xmm[dst as usize].0);
+    let b = crate::dispatch::LANES32(c.xmm[src as usize].0);
+    let mut o = a;
+    let src_lane = ((imm >> 6) & 3) as usize;
+    let dst_lane = ((imm >> 4) & 3) as usize;
+    o[dst_lane] = b[src_lane];
+    c.xmm[dst as usize].0[0] = o[0] as u64 | (o[1] as u64) << 32;
+    c.xmm[dst as usize].0[1] = o[2] as u64 | (o[3] as u64) << 32;
+}

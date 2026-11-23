@@ -750,12 +750,96 @@ fn emit(c: &mut String, insn: &Instruction, image_base: u64, iat: &std::collecti
             return Ok(false);
         }
         Xlatb => { writeln!(c, "  GOW_REG(cpu, rax) = (GOW_REG(cpu, rax) & 0xffffffffffffff00ull) | (uint64_t)(*(uint8_t*)(GOW_REG(cpu, rbx) + (GOW_REG(cpu, rax) & 0xff)));")?; return Ok(false); }
+        // --- x87 ---
+        Fld => {
+            if insn.op0_kind() == OpKind::Memory {
+                let is32 = insn.memory_size().size() == 32;
+                let m = if is32 { format!("(double)*(float*)(uintptr_t)({})", mem_expr(insn, image_base)) } else { format!("*(double*)(uintptr_t)({})", mem_expr(insn, image_base)) };
+                writeln!(c, "  gow_x87_ld(cpu, {m}, {});", if is32 {1} else {0})?;
+            } else {
+                let i = insn.op0_register() as u32;
+                writeln!(c, "  gow_x87_push(cpu, gow_x87_get(cpu, {}));", x87_index(i))?;
+            }
+            return Ok(false);
+        }
+        Fld1 => { writeln!(c, "  gow_x87_push(cpu, 1.0);")?; return Ok(false); }
+        Fldz => { writeln!(c, "  gow_x87_push(cpu, 0.0);")?; return Ok(false); }
+        Fst | Fstp => {
+            let pop = m == Fstp;
+            if insn.op0_kind() == OpKind::Memory {
+                let is32 = insn.memory_size().size() == 32;
+                let addr = mem_expr(insn, image_base);
+                if is32 {
+                    writeln!(c, "  *(float*)(uintptr_t)({addr}) = (float)gow_x87_get(cpu, 0);")?;
+                } else {
+                    writeln!(c, "  *(double*)(uintptr_t)({addr}) = gow_x87_get(cpu, 0);")?;
+                }
+                if pop { writeln!(c, "  gow_x87_pop(cpu);")?; }
+            } else {
+                let i = x87_index(insn.op0_register() as u32);
+                writeln!(c, "  gow_x87_set(cpu, {i}, gow_x87_get(cpu, 0));")?;
+                if pop { writeln!(c, "  gow_x87_pop(cpu);")?; }
+            }
+            return Ok(false);
+        }
+        Fadd | Fsub | Fmul | Fdiv | Fsubr | Fdivr => {
+            let op = match m { Fadd=>0u32, Fsub=>1, Fmul=>2, Fdiv=>3, Fsubr=>4, Fdivr=>5, _=>0 };
+            let pop = false;
+            // Detect the "Faddp/Fsubp..." forms: destination is ST(0) with pop encoded in mnemonic name suffix handled by iced as separate mnemonics (Faddp etc).
+            if insn.op0_kind() == OpKind::Memory {
+                let is32 = insn.memory_size().size() == 32;
+                let md = if is32 { format!("(double)*(float*)(uintptr_t)({})", mem_expr(insn, image_base)) } else { format!("*(double*)(uintptr_t)({})", mem_expr(insn, image_base)) };
+                writeln!(c, "  gow_x87_arith_m(cpu, {md}, {op}, 0);")?;
+            } else {
+                let i = x87_index(insn.op0_register() as u32);
+                writeln!(c, "  gow_x87_arith(cpu, {i}, {op}, 0);")?;
+            }
+            let _ = pop;
+            return Ok(false);
+        }
+        Faddp | Fsubp | Fmulp | Fdivp | Fsubrp | Fdivrp => {
+            let op = match m { Faddp=>0u32, Fsubp=>1, Fmulp=>2, Fdivp=>3, Fsubrp=>4, Fdivrp=>5, _=>0 };
+            let i = x87_index(insn.op0_register() as u32);
+            writeln!(c, "  gow_x87_arith(cpu, {i}, {op}, 1);")?;
+            return Ok(false);
+        }
+        Fcom | Fcomp => {
+            let pop = m == Fcomp;
+            if insn.op0_kind() == OpKind::Memory {
+                let is32 = insn.memory_size().size() == 32;
+                let md = if is32 { format!("(double)*(float*)(uintptr_t)({})", mem_expr(insn, image_base)) } else { format!("*(double*)(uintptr_t)({})", mem_expr(insn, image_base)) };
+                writeln!(c, "  gow_x87_com_m(cpu, {md}, {pop2});", pop2 = if pop {1} else {0})?;
+            } else {
+                let i = x87_index(insn.op0_register() as u32);
+                writeln!(c, "  gow_x87_com(cpu, {i}, {});", if pop {1} else {0})?;
+            }
+            return Ok(false);
+        }
+        Fucomip | Fcomip => { let i = x87_index(insn.op0_register() as u32); writeln!(c, "  gow_x87_fucomi(cpu, {i}, 1);")?; return Ok(false); }
+        Fucomi | Fcomi => { let i = x87_index(insn.op0_register() as u32); writeln!(c, "  gow_x87_fucomi(cpu, {i}, 0);")?; return Ok(false); }
+        Fxch => { let i = x87_index(insn.op0_register() as u32); writeln!(c, "  gow_x87_fxch(cpu, {i});")?; return Ok(false); }
+        Fnstsw | Fstsw => { writeln!(c, "  *(uint16_t*)(uintptr_t)({}) = (uint16_t)gow_x87_fstsw(cpu);", mem_expr(insn, image_base))?; return Ok(false); }
+        Fnstcw | Fstcw => { writeln!(c, "  *(uint16_t*)(uintptr_t)({}) = (uint16_t)gow_x87_fnstcw(cpu);", mem_expr(insn, image_base))?; return Ok(false); }
+        Fldcw => { writeln!(c, "  gow_x87_fldcw(cpu, gow_load(cpu, {}, 2));", mem_expr(insn, image_base))?; return Ok(false); }
+        Fninit | Finit => { writeln!(c, "  gow_x87_init(cpu);")?; return Ok(false); }
+        Ffree | Fdecstp | Fincstp | Fnop | Fclex | Fnclex => { return Ok(false); }
         _ => {}
     }
 
     // --- fallback: explicit trap ---
     trap(c, insn, image_base, unimpl, un)?;
     Ok(false)
+}
+
+fn x87_index(r: u32) -> u32 {
+    // iced reports ST(n) register numbers; map to stack index 0..7.
+    // ST0 is the lowest of the ST registers' encoding range.
+    use iced_x86::Register::*;
+    match r {
+        x if x == ST0 as u32 => 0, x if x == ST1 as u32 => 1, x if x == ST2 as u32 => 2,
+        x if x == ST3 as u32 => 3, x if x == ST4 as u32 => 4, x if x == ST5 as u32 => 5,
+        x if x == ST6 as u32 => 6, x if x == ST7 as u32 => 7, _ => 0,
+    }
 }
 
 fn shift_id(op: &str) -> u32 {
@@ -995,7 +1079,39 @@ fn emit_sse(insn: &Instruction, image_base: u64) -> Option<String> {
             }
             None
         }
+        Pslld => { let s = shift_count_expr(insn, sreg, image_base); if let (Some(d),Some(c))=(dreg,s){ let _=writeln!(out,"  gow_xmm_shift(cpu, {d}, {c}, 2, 4);"); return Some(out);} None }
+        Psllw => { let s = shift_count_expr(insn, sreg, image_base); if let (Some(d),Some(c))=(dreg,s){ let _=writeln!(out,"  gow_xmm_shift(cpu, {d}, {c}, 2, 2);"); return Some(out);} None }
+        Psllq => { let s = shift_count_expr(insn, sreg, image_base); if let (Some(d),Some(c))=(dreg,s){ let _=writeln!(out,"  gow_xmm_shift(cpu, {d}, {c}, 2, 8);"); return Some(out);} None }
+        Psrld => { let s = shift_count_expr(insn, sreg, image_base); if let (Some(d),Some(c))=(dreg,s){ let _=writeln!(out,"  gow_xmm_shift(cpu, {d}, {c}, 0, 4);"); return Some(out);} None }
+        Psrlw => { let s = shift_count_expr(insn, sreg, image_base); if let (Some(d),Some(c))=(dreg,s){ let _=writeln!(out,"  gow_xmm_shift(cpu, {d}, {c}, 0, 2);"); return Some(out);} None }
+        Psrlq => { let s = shift_count_expr(insn, sreg, image_base); if let (Some(d),Some(c))=(dreg,s){ let _=writeln!(out,"  gow_xmm_shift(cpu, {d}, {c}, 0, 8);"); return Some(out);} None }
+        Psrad => { let s = shift_count_expr(insn, sreg, image_base); if let (Some(d),Some(c))=(dreg,s){ let _=writeln!(out,"  gow_xmm_shift(cpu, {d}, {c}, 1, 4);"); return Some(out);} None }
+        Unpcklps | Unpcklpd | Vunpcklps | Vunpcklpd => { if let (Some(d),Some(s))=(dreg,sreg){ let _=writeln!(out,"  gow_xmm_unpck(cpu, {d}, {s}, 4, 0);"); return Some(out);} None }
+        Unpckhps | Unpckhpd | Vunpckhps | Vunpckhpd => { if let (Some(d),Some(s))=(dreg,sreg){ let _=writeln!(out,"  gow_xmm_unpck(cpu, {d}, {s}, 4, 1);"); return Some(out);} None }
+        Punpckldq => { if let (Some(d),Some(s))=(dreg,sreg){ let _=writeln!(out,"  gow_xmm_punpck32(cpu, {d}, {s}, 4, 0);"); return Some(out);} None }
+        Punpckhdq => { if let (Some(d),Some(s))=(dreg,sreg){ let _=writeln!(out,"  gow_xmm_punpck32(cpu, {d}, {s}, 4, 1);"); return Some(out);} None }
+        Punpcklwd | Punpckhwd => { let hi = if m==Punpckhwd {1} else {0}; if let (Some(d),Some(s))=(dreg,sreg){ let _=writeln!(out,"  gow_xmm_punpck_wd(cpu, {d}, {s}, {hi});"); return Some(out);} None }
+        Punpcklqdq | Punpckhqdq => { let hi = if m==Punpckhqdq {1} else {0}; if let (Some(d),Some(s))=(dreg,sreg){ let _=writeln!(out,"  gow_xmm_punpck_qdq(cpu, {d}, {s}, {hi});"); return Some(out);} None }
+        Movshdup => { if let Some(d)=dreg { let _=writeln!(out,"  gow_xmm_movshdup(cpu, {d});"); return Some(out);} None }
+        Movsldup => { if let Some(d)=dreg { let _=writeln!(out,"  gow_xmm_movsldup(cpu, {d});"); return Some(out);} None }
+        Haddps => { if let (Some(d),Some(s))=(dreg,sreg){ let _=writeln!(out,"  gow_xmm_hadd(cpu, {d}, {s});"); return Some(out);} None }
+        Blendps => { if let (Some(d),Some(s))=(dreg,sreg){ let _=writeln!(out,"  gow_xmm_blendps(cpu, {d}, {s}, {});", insn.immediate8()); return Some(out);} None }
+        Roundps => { if let Some(d)=dreg { let _=writeln!(out,"  gow_xmm_roundps(cpu, {d}, {});", insn.immediate8()); return Some(out);} None }
+        Insertps => { if let (Some(d),Some(s))=(dreg,sreg){ let _=writeln!(out,"  gow_xmm_insertps(cpu, {d}, {s}, {});", insn.immediate8()); return Some(out);} None }
         _ => None,
+    }
+}
+
+/// Shift count expression: immediate, or the low qword of the source XMM.
+fn shift_count_expr(insn: &Instruction, sreg: Option<u32>, image_base: u64) -> Option<String> {
+    if insn.op1_kind() == OpKind::Immediate8 {
+        Some(format!("{}", insn.immediate8()))
+    } else if insn.op1_kind() == OpKind::Memory {
+        Some(format!("(uint32_t)gow_load(cpu, {}, 8)", mem_expr(insn, image_base)))
+    } else if let Some(s) = sreg {
+        Some(format!("(uint32_t)gow_xmm_lane0(cpu, {s})"))
+    } else {
+        None
     }
 }
 

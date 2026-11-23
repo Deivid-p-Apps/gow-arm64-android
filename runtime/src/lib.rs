@@ -6,6 +6,7 @@ pub mod win32;
 pub mod fileio;
 pub mod steam;
 pub mod sse_extra;
+pub mod x87;
 #[cfg(target_os = "android")]
 pub mod jni;
 
