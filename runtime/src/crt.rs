@@ -183,6 +183,36 @@ pub unsafe fn call(cpu: *mut GowCpu, func: &str) -> bool {
         "_seh_filter_exe" | "_seh_filter_dll" => 0,
         "__sys_nerr" => 0,
         "__acrt_iob_func" => 0x0000_0c00_0000_0000 + a0 * 0x100, // stable fake FILE*
+        // --- setjmp/longjmp (save/restore the guest register file) ---
+        "__intrinsic_setjmp" | "_setjmp" | "setjmp" => {
+            // Save the guest state into the jmp_buf. Layout (our own, 64 bytes):
+            // [0..8)=RSP after return, [8..16)=return RVA, [16..144)=GPRs.
+            let buf = a0;
+            // The return RVA is the value just pushed by the guest call; read the
+            // caller's return address from the guest stack top.
+            let ret_addr_va = *((c.gpr.rsp + 8) as *const u64);
+            *(buf as *mut u64) = c.gpr.rsp + 16; // resume stack
+            *((buf as *mut u8).add(8) as *mut u64) = ret_addr_va;
+            let gprs = (buf as *mut u8).add(16) as *mut u64;
+            for (i, v) in [c.gpr.rax, c.gpr.rbx, c.gpr.rcx, c.gpr.rdx, c.gpr.rsi, c.gpr.rdi,
+                           c.gpr.rbp, c.gpr.rsp, c.gpr.r8, c.gpr.r9, c.gpr.r10, c.gpr.r11,
+                           c.gpr.r12, c.gpr.r13, c.gpr.r14, c.gpr.r15].iter().enumerate() {
+                *gprs.add(i) = *v;
+            }
+            0
+        }
+        "longjmp" | "_longjmp" => {
+            let buf = a0;
+            let val = if a1 == 0 { 1 } else { a1 };
+            c.gpr.rsp = *(buf as *const u64);
+            c.gpr.rax = val;
+            // Resume at the saved return RVA via the dispatcher.
+            let ret_va = *((buf as *const u8).add(8) as *const u64);
+            if ret_va >= c.image_base && ret_va < c.image_base + c.image_size {
+                c.next_rva = (ret_va - c.image_base) as u32;
+            }
+            val
+        }
         "__C_specific_handler" | "__CxxFrameHandler3" => return false, // SEH/C++ exceptions unimplemented
         _ => return false,
     };
