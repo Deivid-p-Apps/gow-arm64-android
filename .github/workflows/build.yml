@@ -45,6 +45,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
       - name: Build runtime + jni for arm64
@@ -53,9 +56,7 @@ jobs:
           cargo ndk -t arm64-v8a -o android/app/src/main/jniLibs build -p gow-runtime --release
       - name: Assemble debug APK
         working-directory: android
-        run: |
-          chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
+        run: gradle assembleDebug --no-daemon
       - uses: actions/upload-artifact@v4
         with:
           name: gow-debug-apk

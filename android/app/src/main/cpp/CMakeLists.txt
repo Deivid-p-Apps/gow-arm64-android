@@ -1,10 +1,9 @@
 cmake_minimum_required(VERSION 3.22)
 project(gow_runtime C CXX)
 
-# The runtime .so is produced by cargo-ndk and placed under jniLibs/arm64-v8a
-# by the CI workflow (cargo ndk -o android/app/src/main/jniLibs). This CMake
-# file exists for any C/C++ glue (e.g. libadrenotools, DXVK Native later) and to
-# satisfy the Gradle externalNativeBuild hook.
+# Native glue that ships inside the APK: the Turnip/adrenotools driver loader and
+# (later) DXVK Native. The Rust runtime .so is produced by cargo-ndk and placed
+# under jniLibs/arm64-v8a by the CI workflow.
 
-add_library(gow_glue SHARED gow_glue.c)
-target_link_libraries(gow_glue log android)
+add_library(gow_glue SHARED gow_glue.c driver_loader.c)
+target_link_libraries(gow_glue log android dl)
