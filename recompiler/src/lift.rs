@@ -893,6 +893,31 @@ fn emit_sse(insn: &Instruction, image_base: u64) -> Option<String> {
         Pslld => { let s=load_src(&mut out); if let (Some(d),Some(s))=(dreg,s){ let _=writeln!(out,"  gow_xmm_shift(cpu, {d}, {}, 2, 4);", if insn.op1_kind()==OpKind::Register {"(uint32_t)(GOW_REG(cpu, rcx) & 0x3f)"} else {"0"}); return Some(out);} let _=s; None }
         Psrld => { let s=load_src(&mut out); if let (Some(d),Some(s))=(dreg,s){ let _=writeln!(out,"  gow_xmm_shift(cpu, {d}, {}, 0, 4);", if insn.op1_kind()==OpKind::Register {"(uint32_t)(GOW_REG(cpu, rcx) & 0x3f)"} else {"0"}); return Some(out);} let _=s; None }
         Pmovmskb => { if let (Some(d),Some(s))=(dreg,sreg){ let _=writeln!(out,"  gow_xmm_pmovmskb(cpu, {d}, {s});"); return Some(out);} None }
+        Packsswb => { if let (Some(d),Some(s))=(dreg,sreg){ let _=writeln!(out,"  gow_xmm_pack(cpu, {d}, {s}, 1, 1);"); return Some(out);} None }
+        Packuswb => { if let (Some(d),Some(s))=(dreg,sreg){ let _=writeln!(out,"  gow_xmm_pack(cpu, {d}, {s}, 1, 0);"); return Some(out);} None }
+        Packssdw => { if let (Some(d),Some(s))=(dreg,sreg){ let _=writeln!(out,"  gow_xmm_pack(cpu, {d}, {s}, 2, 1);"); return Some(out);} None }
+        Packusdw => { if let (Some(d),Some(s))=(dreg,sreg){ let _=writeln!(out,"  gow_xmm_pack(cpu, {d}, {s}, 2, 0);"); return Some(out);} None }
+        Pshufb => { let s=load_src(&mut out); if let (Some(d),Some(s))=(dreg,s){ let _=writeln!(out,"  gow_xmm_pshufb(cpu, {d}, {s});"); return Some(out);} None }
+        Pabsd => { if let Some(d)=dreg { let _=writeln!(out,"  gow_xmm_pabs(cpu, {d}, 4);"); return Some(out);} None }
+        Pabsw => { if let Some(d)=dreg { let _=writeln!(out,"  gow_xmm_pabs(cpu, {d}, 2);"); return Some(out);} None }
+        Pabsb => { if let Some(d)=dreg { let _=writeln!(out,"  gow_xmm_pabs(cpu, {d}, 1);"); return Some(out);} None }
+        Pmulld => { let s=load_src(&mut out); if let (Some(d),Some(s))=(dreg,s){ let _=writeln!(out,"  gow_xmm_pmulld(cpu, {d}, {s});"); return Some(out);} None }
+        Pminsw => { let s=load_src(&mut out); if let (Some(d),Some(s))=(dreg,s){ let _=writeln!(out,"  gow_xmm_pminmax(cpu, {d}, {s}, 2, 0, 1);"); return Some(out);} None }
+        Pmaxsw => { let s=load_src(&mut out); if let (Some(d),Some(s))=(dreg,s){ let _=writeln!(out,"  gow_xmm_pminmax(cpu, {d}, {s}, 2, 1, 1);"); return Some(out);} None }
+        Pminub => { let s=load_src(&mut out); if let (Some(d),Some(s))=(dreg,s){ let _=writeln!(out,"  gow_xmm_pminmax(cpu, {d}, {s}, 1, 0, 0);"); return Some(out);} None }
+        Pminsd => { let s=load_src(&mut out); if let (Some(d),Some(s))=(dreg,s){ let _=writeln!(out,"  gow_xmm_pminmax(cpu, {d}, {s}, 4, 0, 1);"); return Some(out);} None }
+        Pshuflw => { if let Some(d)=dreg { let _=writeln!(out,"  gow_xmm_pshuf_hw(cpu, {d}, {}, 0);", insn.immediate8()); return Some(out);} None }
+        Pshufhw => { if let Some(d)=dreg { let _=writeln!(out,"  gow_xmm_pshuf_hw(cpu, {d}, {}, 1);", insn.immediate8()); return Some(out);} None }
+        Pextrw => {
+            let s = xmm_index(insn.op1_register())?;
+            let (base,_,_) = classify(insn.op0_register())?;
+            let _=writeln!(out,"  GOW_REG(cpu, {base}) = gow_xmm_pextrw(cpu, {s}, {});", insn.immediate8()); return Some(out);
+        }
+        Pinsrw => { let val = if insn.op1_kind()==OpKind::Memory { format!("gow_load(cpu, {}, 2)", mem_expr(insn, image_base)) } else if let Some((b,_,_))=classify(insn.op1_register()) { format!("(GOW_REG(cpu, {b}) & 0xffff)") } else { "0".into() }; if let Some(d)=dreg { let _=writeln!(out,"  gow_xmm_pinsrw(cpu, {d}, {val}, {});", insn.immediate8()); return Some(out);} None }
+        Pmovsxbd => { if let (Some(d),Some(s))=(dreg,sreg){ let _=writeln!(out,"  gow_xmm_pmovsx(cpu, {d}, {s}, 1, 1);"); return Some(out);} None }
+        Pmovzxbd => { if let (Some(d),Some(s))=(dreg,sreg){ let _=writeln!(out,"  gow_xmm_pmovsx(cpu, {d}, {s}, 1, 0);"); return Some(out);} None }
+        Pmovsxwd => { if let (Some(d),Some(s))=(dreg,sreg){ let _=writeln!(out,"  gow_xmm_pmovsx(cpu, {d}, {s}, 2, 1);"); return Some(out);} None }
+        Pmovzxwd => { if let (Some(d),Some(s))=(dreg,sreg){ let _=writeln!(out,"  gow_xmm_pmovsx(cpu, {d}, {s}, 2, 0);"); return Some(out);} None }
         Movmskps | Movmskpd => {
             let s = xmm_index(insn.op1_register())?;
             let (base,_,_) = classify(insn.op0_register())?;

@@ -106,6 +106,15 @@ void     gow_cmps(GowCpu* cpu, uint32_t size);
 void     gow_enter(GowCpu* cpu, uint64_t frame, uint64_t level);
 void     gow_ldmxcsr(GowCpu* cpu, uint64_t addr);
 void     gow_stmxcsr(GowCpu* cpu, uint64_t addr);
+void     gow_xmm_pack(GowCpu* cpu, int dst, int src, uint32_t elem, uint32_t sign);
+void     gow_xmm_pshufb(GowCpu* cpu, int dst, int src);
+void     gow_xmm_pabs(GowCpu* cpu, int dst, uint32_t elem);
+void     gow_xmm_pmulld(GowCpu* cpu, int dst, int src);
+void     gow_xmm_pminmax(GowCpu* cpu, int dst, int src, uint32_t elem, uint32_t max, uint32_t sign);
+void     gow_xmm_pshuf_hw(GowCpu* cpu, int dst, uint32_t sel, uint32_t high);
+uint64_t gow_xmm_pextrw(GowCpu* cpu, int src, uint32_t imm);
+void     gow_xmm_pinsrw(GowCpu* cpu, int dst, uint64_t val, uint32_t imm);
+void     gow_xmm_pmovsx(GowCpu* cpu, int dst, int src, uint32_t size, uint32_t sign);
 void     gow_unimpl(GowCpu* cpu, uint32_t rva, uint32_t mnemonic);
 
 /* Drive recompiled code starting at a function entry RVA. */

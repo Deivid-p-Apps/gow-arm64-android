@@ -4,6 +4,7 @@ pub mod dispatch;
 pub mod log;
 pub mod win32;
 pub mod steam;
+pub mod sse_extra;
 #[cfg(target_os = "android")]
 pub mod jni;
 
