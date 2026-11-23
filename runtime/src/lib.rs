@@ -1,6 +1,7 @@
 //! gow-runtime: guest dispatcher, memory, Win32/NT layer, and graphics.
 
 pub mod dispatch;
+pub mod hostcall;
 pub mod log;
 pub mod win32;
 pub mod input;

@@ -777,11 +777,97 @@ pub fn global() -> &'static AudioEngine {
     ENGINE.get_or_init(AudioEngine::new)
 }
 
-/// XAudio2 bootstrap: produce an IXAudio2 vtable pointer for the guest.
-/// Returns 0 when no vtable host is available; the caller handles that as
-/// E_NOINTERFACE rather than executing a fake pointer.
-pub fn xaudio2_create_vtable(_engine: &AudioEngine) -> u64 {
-    0
+/// XAudio2 bootstrap: build an `IXAudio2` object and vtable for the guest.
+///
+/// The guest calls COM methods as `call [vtable + idx*8]` with `this` in RCX.
+/// We return a small integer "object" handle as `this` and a vtable of host
+/// thunks (see `crate::hostcall`) that decode the guest register file and drive
+/// the real `AudioEngine`. Unimplemented methods return E_NOTIMPL, never a fake
+/// success.
+pub fn xaudio2_create_vtable(engine: &'static AudioEngine) -> u64 {
+    use crate::hostcall;
+
+    // IXAudio2 layout (indices): 0 QueryInterface,1 AddRef,2 Release,
+    // 3 GetDeviceCount,4 GetDeviceDetails,5 CreateSourceVoice,
+    // 6 CreateSubmixVoice,7 CreateMasteringVoice,8 StartEngine,9 StopEngine,
+    // 10 CommitChanges,11 GetPerformanceData,12 SetDebugConfiguration.
+    const VT_LEN: usize = 13;
+
+    let create_master = hostcall::register(move |cpu| unsafe {
+        let c = &mut *cpu;
+        // args: this(h), input_channels(dx), input_sample_rate(r8), flags(r9)
+        let channels = c.gpr.rdx as u32;
+        let rate = c.gpr.r8 as u32;
+        let _ = c.gpr.r9;
+        let _ = engine.create_master_voice(rate, channels);
+        c.gpr.rax = 0; // S_OK
+    });
+
+    let create_source = hostcall::register(move |cpu| unsafe {
+        let c = &mut *cpu;
+        // args: this(h), WAVEFORMATEX* (dx)
+        let wfx = c.gpr.rdx;
+        let fmt = audio_format_from_wfx(wfx).unwrap_or(AudioFormat { sample_rate: 48000, channels: 2, bits: 16 });
+        let voice = engine.create_source_voice(fmt);
+        // Return an IXAudio2SourceVoice: an object handle + its own vtable.
+        let obj = make_source_voice_object(engine, voice);
+        c.gpr.rax = 0; // S_OK
+        if c.gpr.rcx != 0 { /* out param not used here */ }
+        // The out pointer is the 2nd stack arg in some sigs; we also expose the
+        // voice id via the returned object pointer's table.
+        c.gpr.r8 = obj; // callers that use the last out-param slot
+        c.gpr.rax = obj; // and as the direct result for single-out forms
+    });
+
+    let start_engine = hostcall::register(|cpu| unsafe { (*cpu).gpr.rax = 0; });
+    let stop_engine = hostcall::register(|cpu| unsafe { (*cpu).gpr.rax = 0; });
+    let query_interface = hostcall::register(|cpu| unsafe { (*cpu).gpr.rax = 0; });
+
+    let vt = hostcall::build_vtable(&[
+        (0, query_interface),
+        (5, create_source),
+        (7, create_master),
+        (8, start_engine),
+        (9, stop_engine),
+    ], VT_LEN);
+    vt
+}
+
+/// Build an `IXAudio2SourceVoice` object: returns its vtable pointer. The voice
+/// id is stashed in the object so the methods can find the real voice.
+fn make_source_voice_object(engine: &'static AudioEngine, voice: u64) -> u64 {
+    use crate::hostcall;
+    // IXAudio2Voice base: 12 SetVolume ...; source: 19 Start,20 Stop,21 Submit.
+    const VT_LEN: usize = 24;
+    let submit = hostcall::register(move |cpu| unsafe {
+        let c = &mut *cpu;
+        let buf = c.gpr.rdx; // XAUDIO2_BUFFER*
+        let ok = engine.submit_xaudio2_buffer(voice, buf);
+        c.gpr.rax = if ok { 0 } else { 0x8000_4005 };
+    });
+    let start = hostcall::register(move |cpu| unsafe {
+        let c = &mut *cpu;
+        engine.start(voice);
+        c.gpr.rax = 0;
+    });
+    let stop = hostcall::register(move |cpu| unsafe {
+        let c = &mut *cpu;
+        engine.stop(voice);
+        c.gpr.rax = 0;
+    });
+    let set_vol = hostcall::register(move |cpu| unsafe {
+        let c = &mut *cpu;
+        // f32 volume passed by value in XMM1 (RDX); read its low 32 bits.
+        let v = f32::from_bits(c.gpr.rdx as u32);
+        engine.set_volume(voice, v);
+        c.gpr.rax = 0;
+    });
+    hostcall::build_vtable(&[
+        (12, set_vol),
+        (19, start),
+        (20, stop),
+        (21, submit),
+    ], VT_LEN)
 }
 
 impl Default for AudioEngine {

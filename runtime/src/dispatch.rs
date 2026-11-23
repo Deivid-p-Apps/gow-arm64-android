@@ -410,6 +410,12 @@ pub unsafe extern "C" fn gow_call_ptr(cpu: *mut GowCpu, target_va: u64) {
 
 #[no_mangle]
 pub unsafe extern "C" fn gow_call_indirect(cpu: *mut GowCpu, target_va: u64) {
+    let _c = &mut *cpu;
+    // Host thunk (COM method / host-provided function): run it directly.
+    if crate::hostcall::is_thunk(target_va) {
+        crate::hostcall::call(target_va, cpu);
+        return;
+    }
     let c = &mut *cpu;
     if target_va >= c.image_base && target_va < c.image_base + c.image_size {
         c.next_rva = (target_va - c.image_base) as u32;
