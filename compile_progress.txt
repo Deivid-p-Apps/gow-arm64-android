@@ -31,3 +31,7 @@ done gow_shard_029.c
 done gow_shard_030.c
 done gow_shard_031.c
 done gow_shard_032.c
+done gow_shard_033.c
+done gow_shard_034.c
+done gow_table.c
+RESULT ok=36 fail=0 link=0 size=59509800

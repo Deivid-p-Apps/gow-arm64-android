@@ -12,8 +12,9 @@ O código do jogo é traduzido para C em tempo de build, compilado para arm64 e 
 - `.text` = ~13.9 MB; **51.869 funções** na tabela `.pdata`; TLS callbacks presentes
 - 7 seções, 579 imports, 61 exports
 - Imports-chave: `d3d11`, `dxgi`, `D3DCOMPILER_47`, `xinput1_4`, `steam_api64`,
-  `bink2w64`, `kernel32`, `user32`, `advapi32`, `ws2_32`, `bcrypt`, `crypt32`,
-  `ole32`, `setupapi`, `rpcrt4`, CRTs. Camada Sony: `libSceGnm/Pad/JobManager/GpuAddress`.
+  `bink2w64`, `kernel32`, `user32`, `advapi32`, `ws2_32` (ordinals), `wldap32`,
+  `iphlpapi`, `rpcrt4`, `ole32`, `setupapi`, `shell32`, CRTs (`api-ms-win-crt-*`,
+  `vcruntime140`, `msvcp140`). Camada Sony: `libSceGnm/Pad/JobManager/GpuAddress`.
 
 ### Dispositivo de teste (ADB)
 Motorola Edge 30 Fusion (`tundra`), SM8350 (Snapdragon 888+), Adreno 725 (Turnip),
