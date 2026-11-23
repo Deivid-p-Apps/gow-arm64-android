@@ -328,6 +328,18 @@ impl ImportResolver {
                     true
                 }
             }
+            ("d3dcompiler_47.dll", "D3DReflect") => {
+                // Parse the DXBC blob and hand back an ID3D11ShaderReflection.
+                let blob = a0;
+                let size = a1 as usize;
+                let out = a3;
+                let bytes = if blob != 0 { std::slice::from_raw_parts(blob as *const u8, size) } else { &[] };
+                let desc = crate::dxbc::parse(bytes).unwrap_or_default();
+                let obj = crate::dxbc::make_object(desc);
+                if out != 0 { *(out as *mut u64) = obj; }
+                c.gpr.rax = 0;
+                true
+            }
             ("d3d11.dll", _) | ("dxgi.dll", _) | ("d3dcompiler_47.dll", _) => {
                 // Route to the loaded graphics backend (DXVK Native). The COM
                 // vtables it returns are what the game calls afterwards.

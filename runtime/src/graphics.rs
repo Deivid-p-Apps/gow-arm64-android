@@ -67,7 +67,6 @@ impl GraphicsBridge {
 
     pub fn is_loaded(&self) -> bool { !self.handles.lock().unwrap().is_empty() }
 
-    /// Attempt to bring up the D3D11 backend the way DXVK Native expects: load
     /// `libdxvk_d3d11.so` / `libdxvk_dxgi.so` from the app's native library dir.
     pub fn autoload(&self, native_lib_dir: &str) -> bool {
         let d3d11 = format!("{native_lib_dir}/libdxvk_d3d11.so");
