@@ -51,9 +51,18 @@ Motorola Edge 30 Fusion (`tundra`), SM8350 (Snapdragon 888+), Adreno 725 (Turnip
 - [ ] Medição de FPS real nos 4 cenários
 
 ## Bugs conhecidos
-- ~1.234 instruções viram `gow_unimpl` (registradas, nunca silenciosas).
+- 224 instruções viram `gow_unimpl` (registradas, nunca silenciosas): `Vpackssdw`
+  (forma YMM de 256 bits), I/O de porta (`in`/`out`/`insb`/`outsd`),
+  `iret`/`syscall`/`sysret`/`lar`/`lsl`, `fbld`/`fbstp` (BCD 80-bit).
 - Jump tables ambíguas (jmp [table+idx*8]) precisam do mapa de ponteiros resolvido.
 - SEH (exceções x64) ainda não modelado.
+
+## Bugs críticos corrigidos (com teste de regressão)
+- **Condition codes off-by-one**: iced usa O=1..G=16; gow_test_cc espera O=0..G=15.
+  Sem o `-1` em `cc_const`, TODO salto condicional testava a condição errada.
+- **mem_size() errado**: dividia por 8, mas `iced::MemorySize::size()` já é em bytes.
+  Resultado: `mov qword [mem], reg` gravava 1 byte; todos os acessos de memória
+  estavam com a largura errada. Corrigido + detecção de float x87 (`==4`, não `==32`).
 
 ## Próximos passos
 1. Fechar a cobertura do lifter (69 mnemônicos).
