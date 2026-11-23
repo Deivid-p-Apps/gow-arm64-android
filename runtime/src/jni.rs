@@ -177,6 +177,32 @@ fn extract_driver_from_zip(zip_path: &std::path::Path, priv_dir: &str) -> Option
     None
 }
 
+/// Load the manifest (import list) and install the Win32 import resolver.
+/// Prefers the copy embedded in the game .so (`gow_manifest_json`), else a
+/// standalone `manifest.json` next to the library or in the game dir.
+fn install_import_resolver(lib_handle: *mut std::ffi::c_void, pdir: &str, gdir: &str) {
+    let mut json = None;
+    unsafe {
+        let sym = dlsym(lib_handle, b"gow_manifest_json\0".as_ptr() as *const c_char);
+        if !sym.is_null() {
+            json = Some(std::ffi::CStr::from_ptr(sym as *const c_char).to_string_lossy().into_owned());
+        }
+    }
+    if json.is_none() {
+        let cands = [format!("{gdir}/manifest.json"), format!("{pdir}/manifest.json")];
+        json = cands.iter().find_map(|p| std::fs::read_to_string(p).ok());
+    }
+    let mut res = crate::win32::ImportResolver::new(gdir);
+    match json {
+        Some(j) => match res.load_manifest(&j) {
+            Ok(_) => crate::glog!("[gow] import resolver installed ({} slots)", res.slot_count()),
+            Err(e) => crate::glog!("[gow] manifest parse error: {e}"),
+        },
+        None => crate::glog!("[gow] WARNING: no manifest found; imports will not resolve"),
+    }
+    crate::dispatch::set_import_resolver(std::sync::Arc::new(res));
+}
+
 const RTLD_NOW: c_int = 2;
 const RTLD_LOCAL: c_int = 0;
 
@@ -257,10 +283,10 @@ pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeLoadAndRun(
         crate::glog!("[gow] staged: {dst}");
         dst
     };
-    run_game_library(CString::new(load_path).unwrap(), image_base, image_size, entry_rva)
+    run_game_library(CString::new(load_path).unwrap(), &pdir, &gdir, image_base, image_size, entry_rva)
 }
 
-fn run_game_library(path: CString, image_base: u64, image_size: u64, entry_rva: u32) -> c_int {
+fn run_game_library(path: CString, pdir: &str, gdir: &str, image_base: u64, image_size: u64, entry_rva: u32) -> c_int {
     let handle = unsafe { dlopen(path.as_ptr(), RTLD_NOW) };
     if handle.is_null() {
         crate::glog!("[gow] dlopen failed (arch mismatch? arm64 required)");
@@ -280,6 +306,11 @@ fn run_game_library(path: CString, image_base: u64, image_size: u64, entry_rva: 
     }
     crate::glog!("[gow] registered {} functions", regs.len());
     install_registry(regs);
+
+    // Install the Win32 import resolver so the recompiled code's
+    // `call [iat_slot]` reaches real implementations. The import list comes
+    // from the manifest the recompiler emitted next to the shards.
+    install_import_resolver(handle, &pdir, &gdir);
 
     let mut cpu = GowCpu::new(image_base, image_size as usize);
     crate::glog!("[gow] entry=0x{entry_rva:x} running");

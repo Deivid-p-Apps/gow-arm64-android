@@ -34,6 +34,8 @@ impl ImportResolver {
         Self { slot_to_import: HashMap::new(), files: crate::fileio::FileTable::new("/storage/emulated/0/god"), graphics: crate::graphics::GraphicsBridge::new(), sync: crate::threads::SyncObjects::new(), threads: crate::threads::ThreadTable::new() }
     }
 
+    pub fn slot_count(&self) -> usize { self.slot_to_import.len() }
+
     pub fn register(&mut self, iat_rva: u32, dll: &str, func: &str) {
         self.slot_to_import.insert(iat_rva, (dll.to_string(), func.to_string()));
     }

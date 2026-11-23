@@ -313,7 +313,13 @@ pub fn lift(pe: &PeImage, out_dir: &std::path::Path) -> Result<LiftOutput> {
     writeln!(tbl, "  {{ 0u, 0 }}")?;
     writeln!(tbl, "}};")?;
     writeln!(tbl, "const unsigned gow_func_count = {};", entries.len())?;
+    // Embed the import manifest so the runtime can install the Win32 resolver
+    // without a separate file on the device.
+    let manifest = build_manifest(pe);
+    writeln!(tbl, "const char gow_manifest_json[] = R\"GOWMANIFEST({manifest})GOWMANIFEST\";")?;
     std::fs::write(out_dir.join("gow_table.c"), &tbl)?;
+    // Also write it standalone for tooling/inspection.
+    let _ = std::fs::write(out_dir.join("manifest.json"), &manifest);
 
     // Keep `c` for the returned source only as a small summary; do not write a
     // monolithic file (shards are the build unit).
@@ -322,6 +328,24 @@ pub fn lift(pe: &PeImage, out_dir: &std::path::Path) -> Result<LiftOutput> {
     let _ = n_shards;
 
     Ok(LiftOutput { function_count: func_count, instruction_count: insn_count, unimpl, unimpl_instances })
+}
+
+fn build_manifest(pe: &PeImage) -> String {
+    let mut m = String::new();
+    m.push_str("{\n");
+    m.push_str(&format!("  \"image_base\": {},\n", pe.image_base));
+    m.push_str(&format!("  \"entry_rva\": {},\n", pe.entry_rva));
+    m.push_str(&format!("  \"size_of_image\": {},\n", pe.size_of_image));
+    m.push_str("  \"imports\": [\n");
+    for (i, imp) in pe.imports.iter().enumerate() {
+        let comma = if i + 1 == pe.imports.len() { "" } else { "," };
+        m.push_str(&format!(
+            "    {{\"dll\":\"{}\",\"func\":\"{}\",\"iat_rva\":{}}}{comma}\n",
+            imp.dll.replace('\\', "\\\\"), imp.func.replace('\\', "\\\\"), imp.iat_rva
+        ));
+    }
+    m.push_str("  ]\n}\n");
+    m
 }
 
 fn trap(c: &mut String, insn: &Instruction, image_base: u64, unimpl: &mut BTreeSet<String>, n: &mut u64) -> Result<()> {

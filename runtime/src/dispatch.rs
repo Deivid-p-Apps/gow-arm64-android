@@ -454,21 +454,21 @@ pub unsafe extern "C" fn gow_import_call(cpu: *mut GowCpu, iat_rva: u32) {
     // implementation, then continue at the return RVA.
     let c = &mut *cpu;
     let ret = gow_pop64(cpu) as u32;
-    let handled = match IMPORT_RESOLVER.with(|r| r.borrow().as_ref().cloned()) {
-        Some(res) => res.call(cpu, iat_rva),
+    // The resolver is process-global (the game runs on several threads).
+    let handled = match IMPORT_RESOLVER.get() {
+        Some(res) => res.as_ref().map(|r| r.call(cpu, iat_rva)).unwrap_or(false),
         None => false,
     };
     let _ = handled;
     c.next_rva = ret;
 }
 
-thread_local! {
-    static IMPORT_RESOLVER: std::cell::RefCell<Option<std::sync::Arc<crate::win32::ImportResolver>>> =
-        std::cell::RefCell::new(None);
-}
+static IMPORT_RESOLVER: std::sync::OnceLock<
+    Option<std::sync::Arc<crate::win32::ImportResolver>>,
+> = std::sync::OnceLock::new();
 
 pub fn set_import_resolver(r: std::sync::Arc<crate::win32::ImportResolver>) {
-    IMPORT_RESOLVER.with(|slot| *slot.borrow_mut() = Some(r));
+    let _ = IMPORT_RESOLVER.set(Some(r));
 }
 
 // ---------------------------------------------------------------------------

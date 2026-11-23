@@ -25,5 +25,7 @@ done
 
 echo "[3/3] linking libgow_game.so"
 "$CC" -shared -fPIC -o "$OUT/libgow_game.so" "$OBJ"/*.o
-echo "done: $OUT/libgow_game.so"
+# The runtime needs the import manifest next to the game library on the device.
+cp "$GEN/manifest.json" "$OUT/manifest.json"
+echo "done: $OUT/libgow_game.so (+ manifest.json)"
 ls -la "$OUT/libgow_game.so"
