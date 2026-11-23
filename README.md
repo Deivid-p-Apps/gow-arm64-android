@@ -82,9 +82,18 @@ the connected device (`adb install -r`, logcat, screencap) — the device is the
 
 ## Status
 
-See `docs/STATUS.md`. Current phase: M0/M1 — the lifter runs over the real executable
-(51,869 functions, 2,756,013 instructions) and emits C with an explicit, non-silent
-coverage report. Graphics/runtime layers are next.
+See `docs/STATUS.md` for the phase, what works, what is missing, and known bugs.
+`docs/DECISIONS.md` records engineering choices, `docs/NOTES.md` the reverse
+engineering, `docs/PERFORMANCE.md` the measurement methodology, and
+`docs/GRAPHICS.md` the D3D11->Vulkan plan.
+
+Current phase: M1/M2 — the recompiler lifts the whole executable (51,869
+functions, 2,754,847 instructions, 99.987% coverage), the generated C compiles
+with the Android clang, control flow is proven end-to-end, a real arm64 APK
+builds in CI and runs on the connected device, and the runtime provides the
+dispatcher, memory, integer/flags, SSE/SSE2/AVX subset, x87, Win32 file/thread/
+sync layer, and a Vulkan + Turnip driver bootstrap. Still to come: the D3D11
+renderer, audio, input and the game reaching its main.
 
 ## Legal
 

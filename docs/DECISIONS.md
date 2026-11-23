@@ -32,3 +32,30 @@ O repositório não guarda arquivos do jogo (nem código gerado a partir deles).
 ## D007 — Reprodutibilidade: código gerado nunca entra no repo
 `generated/` é ignorado. O repositório contém só ferramentas e runtime; o usuário
 fornece sua cópia do jogo e gera o código localmente.
+
+## D008 — Modelo de fluxo de controle: chamadas C diretas, não trampolim
+Recompiladores que roteiam `call`/`ret` por um trampolim central de endereços
+quebram porque endereços de retorno caem no meio de funções (não são entradas
+válidas). Decisão: chamadas inter-função viram chamadas C diretas (`f_<rva>(cpu)`);
+ramos intra-função viram `goto L_<rva>`; apenas alvos computados/desconhecidos vão
+para `gow_trampoline`. Provado ponta-a-ponta com um programa sintético (rax=15).
+
+## D009 — x86-64 -> C (não LLVM IR direto)
+Mantido de D002. O clang (inclusive o do Termux, que mira
+`aarch64-unknown-linux-android24`) otimiza o C para arm64 com NEON e barreiras.
+O `.so` do jogo gerado aqui já é arm64 Android real.
+
+## D010 — Sharding do código gerado
+O C do jogo tem ~295 MB. Compilar num só TU estoura a RAM (aparelhos com ~1.5 GB
+livres) e o próprio CI. Decisão: 1.500 funções por shard (~35 shards de ~3.6 MB),
+cada um compilável isolado; protótipos compartilhados em `gow_protos.h`.
+
+## D011 — DXVK Native na fase 1, backend Rust nativo na fase 2
+Conforme o prompt: colocar o jogo de pé com DXVK Native (d3d11+dxgi -> Vulkan),
+depois substituir por um backend Vulkan nativo em Rust (ash) com DXBC->SPIR-V.
+O backend nativo é o alvo final; DXVK é fallback até a paridade.
+
+## D012 — Falha explícita em cada camada
+Imports desconhecidos, alvos de salto não resolvidos e instruções não liftadas são
+contados e logados (logcat), nunca silenciados. Nenhuma métrica é fabricada;
+`docs/PERFORMANCE.md` só recebe números medidos no dispositivo.
