@@ -1,5 +1,0 @@
-   111: 000000000001cd2c  1016 FUNC    GLOBAL DEFAULT    14 Java_com_gow_arm64_GowActivity_nativeRun
-   112: 000000000001d124    68 FUNC    GLOBAL DEFAULT    14 Java_com_gow_arm64_GowActivity_nativeSurfaceChanged
-   113: 000000000001d168   128 FUNC    GLOBAL DEFAULT    14 Java_com_gow_arm64_GowActivity_nativeSurfaceCreated
-   116: 000000000001cc24   264 FUNC    GLOBAL DEFAULT    14 Java_com_gow_arm64_GowActivity_nativeInit
-   132: 000000000001d1e8    16 FUNC    GLOBAL DEFAULT    14 Java_com_gow_arm64_GowActivity_nativeSurfaceDestroyed
