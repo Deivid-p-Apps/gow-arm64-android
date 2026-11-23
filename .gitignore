@@ -37,3 +37,8 @@ ctest/
 artifacts/
 *.log
 mn.txt
+game_obj/
+game_build_*.log
+game_build_done.txt
+libgow_game.so
+syms.txt
