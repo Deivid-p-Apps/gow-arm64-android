@@ -955,8 +955,19 @@ pub unsafe extern "C" fn gow_xmm_minmax(cpu: *mut GowCpu, dst: i32, src: i32, ma
             a[0] = (a[0] & 0xffff_ffff_0000_0000) | r.to_bits() as u64;
         }
         _ => {
-            let (p, q) = (f64::from_bits(a[0]), f64::from_bits(b[0]));
-            a[0] = (if max != 0 { p.max(q) } else { p.min(q) }).to_bits();
+            if mode == 3 {
+                // packed double (minpd/maxpd)
+                let mut o = [0u64; 2];
+                for i in 0..2 {
+                    let p = f64::from_bits(a[i]);
+                    let q = f64::from_bits(b[i]);
+                    o[i] = (if max != 0 { p.max(q) } else { p.min(q) }).to_bits();
+                }
+                *a = o;
+            } else {
+                let (p, q) = (f64::from_bits(a[0]), f64::from_bits(b[0]));
+                a[0] = (if max != 0 { p.max(q) } else { p.min(q) }).to_bits();
+            }
         }
     }
 }

@@ -338,6 +338,31 @@ fn emit(c: &mut String, insn: &Instruction, image_base: u64, iat: &std::collecti
 
     // --- control flow ---
     match m {
+        Loop | Loope | Loopne => {
+            let t = (insn.near_branch64() - image_base) as u32;
+            let cc = match m { Loope => Some(0x4u32), Loopne => Some(0x5u32), _ => None };
+            // dec count (rcx); branch if not zero (+ ZF condition for loop e/ne)
+            writeln!(c, "  {{ uint64_t _c = GOW_REG(cpu, rcx) & 0xffffffffull; _c = (_c - 1) & 0xffffffffull; GOW_REG(cpu, rcx) = (GOW_REG(cpu, rcx) & 0xffffffff00000000ull) | _c;")?;
+            match cc {
+                Some(ccv) => writeln!(c, "     if (_c != 0 && gow_test_cc(cpu, {ccv})) {{ if (0){{}} goto L_{t:x}; }} }}")?,
+                None => writeln!(c, "     if (_c != 0) goto L_{t:x}; }}")?,
+            }
+            // Guard: only emit goto when target is a known label in this function.
+            if !(t >= func_start && t < func_end && starts.contains(&t)) {
+                writeln!(c, "  gow_trampoline(cpu, 0x{t:x}u);")?;
+            }
+            return Ok(false);
+        }
+        Jrcxz | Jecxz => {
+            let t = (insn.near_branch64() - image_base) as u32;
+            let reg = if m == Jrcxz { "rcx" } else { "rcx" };
+            if t >= func_start && t < func_end && starts.contains(&t) {
+                writeln!(c, "  if ((GOW_REG(cpu, {reg}) & 0xffffffffull) == 0) goto L_{t:x};")?;
+            } else {
+                writeln!(c, "  if ((GOW_REG(cpu, {reg}) & 0xffffffffull) == 0) {{ gow_trampoline(cpu, 0x{t:x}u); }}")?;
+            }
+            return Ok(false);
+        }
         Jmp => {
             if insn.op0_kind() == OpKind::NearBranch64 {
                 let t = (insn.near_branch64() - image_base) as u32;
@@ -822,7 +847,8 @@ fn emit(c: &mut String, insn: &Instruction, image_base: u64, iat: &std::collecti
         Fnstcw | Fstcw => { writeln!(c, "  *(uint16_t*)(uintptr_t)({}) = (uint16_t)gow_x87_fnstcw(cpu);", mem_expr(insn, image_base))?; return Ok(false); }
         Fldcw => { writeln!(c, "  gow_x87_fldcw(cpu, gow_load(cpu, {}, 2));", mem_expr(insn, image_base))?; return Ok(false); }
         Fninit | Finit => { writeln!(c, "  gow_x87_init(cpu);")?; return Ok(false); }
-        Ffree | Fdecstp | Fincstp | Fnop | Fclex | Fnclex => { return Ok(false); }
+        Ffree | Fdecstp | Fincstp | Fnop | Fclex | Fnclex | Wait => { return Ok(false); }
+        Int3 | Int | Int1 => { return Ok(false); }  // debugger traps: ignore in a port
         _ => {}
     }
 
@@ -965,8 +991,10 @@ fn emit_sse(insn: &Instruction, image_base: u64) -> Option<String> {
         Maxss => { let s = load_src(&mut out); if let (Some(d),Some(s))=(dreg,s){ let _=writeln!(out,"  gow_xmm_minmax(cpu, {d}, {s}, 1, 1);"); return Some(out);} None }
         Minsd => { let s = load_src(&mut out); if let (Some(d),Some(s))=(dreg,s){ let _=writeln!(out,"  gow_xmm_minmax(cpu, {d}, {s}, 0, 2);"); return Some(out);} None }
         Maxsd => { let s = load_src(&mut out); if let (Some(d),Some(s))=(dreg,s){ let _=writeln!(out,"  gow_xmm_minmax(cpu, {d}, {s}, 1, 2);"); return Some(out);} None }
-        Unpcklps | Unpcklpd => { if let (Some(d),Some(s))=(dreg,sreg){ let _=writeln!(out,"  gow_xmm_unpck(cpu, {d}, {s}, 4, 0);"); return Some(out);} None }
-        Unpckhps | Unpckhpd => { if let (Some(d),Some(s))=(dreg,sreg){ let _=writeln!(out,"  gow_xmm_unpck(cpu, {d}, {s}, 4, 1);"); return Some(out);} None }
+        Unpcklps | Unpcklpd => { let s=load_src(&mut out); if let (Some(d),Some(s))=(dreg,s){ let _=writeln!(out,"  gow_xmm_unpck(cpu, {d}, {s}, 4, 0);"); return Some(out);} None }
+        Unpckhps | Unpckhpd => { let s=load_src(&mut out); if let (Some(d),Some(s))=(dreg,s){ let _=writeln!(out,"  gow_xmm_unpck(cpu, {d}, {s}, 4, 1);"); return Some(out);} None }
+        Minpd => { let s=load_src(&mut out); if let (Some(d),Some(s))=(dreg,s){ let _=writeln!(out,"  gow_xmm_minmax(cpu, {d}, {s}, 0, 3);"); return Some(out);} None }
+        Maxpd => { let s=load_src(&mut out); if let (Some(d),Some(s))=(dreg,s){ let _=writeln!(out,"  gow_xmm_minmax(cpu, {d}, {s}, 1, 3);"); return Some(out);} None }
         Movhlps => { if let (Some(d),Some(s))=(dreg,sreg){ let _=writeln!(out,"  gow_xmm_movhl(cpu, {d}, {s});"); return Some(out);} None }
         Movlhps => { if let (Some(d),Some(s))=(dreg,sreg){ let _=writeln!(out,"  gow_xmm_movlh(cpu, {d}, {s});"); return Some(out);} None }
         Shufps => { let s = load_src(&mut out); if let (Some(d),Some(s))=(dreg,s){ let _=writeln!(out,"  gow_xmm_shufps(cpu, {d}, {s}, {});", insn.immediate8()); return Some(out);} None }
@@ -1091,12 +1119,26 @@ fn emit_sse(insn: &Instruction, image_base: u64) -> Option<String> {
         Punpcklwd | Punpckhwd => { let hi = if m==Punpckhwd {1} else {0}; if let (Some(d),Some(s))=(dreg,sreg){ let _=writeln!(out,"  gow_xmm_punpck_wd(cpu, {d}, {s}, {hi});"); return Some(out);} None }
         Punpcklqdq | Punpckhqdq => { let hi = if m==Punpckhqdq {1} else {0}; if let (Some(d),Some(s))=(dreg,sreg){ let _=writeln!(out,"  gow_xmm_punpck_qdq(cpu, {d}, {s}, {hi});"); return Some(out);} None }
         Movshdup => { if let Some(d)=dreg { let _=writeln!(out,"  gow_xmm_movshdup(cpu, {d});"); return Some(out);} None }
-        Movhpd => { if insn.op0_kind()==OpKind::Memory { if let Some(s)=sreg { let _=writeln!(out,"  gow_store(cpu, {}, gow_xmm_lane0(cpu,{s}), 8);", mem_expr(insn, image_base)); return Some(out);} } else if let (Some(d),Some(s))=(dreg,sreg){ let _=writeln!(out,"  gow_xmm_movhpd(cpu, {d}, {s});"); return Some(out);} None }
+        Movhpd => {
+            if insn.op0_kind()==OpKind::Memory { if let Some(s)=sreg { let _=writeln!(out,"  gow_store(cpu, {}, gow_xmm_lane0(cpu,{s}), 8);", mem_expr(insn, image_base)); return Some(out);} }
+            else if insn.op1_kind()==OpKind::Memory { if let Some(d)=dreg { let _=writeln!(out,"  gow_xmm_set_lane1(cpu, {d}, gow_load(cpu, {}, 8));", mem_expr(insn, image_base)); return Some(out);} }
+            else if let (Some(d),Some(s))=(dreg,sreg){ let _=writeln!(out,"  gow_xmm_movhpd(cpu, {d}, {s});"); return Some(out);}
+            None
+        }
         Movsldup => { if let Some(d)=dreg { let _=writeln!(out,"  gow_xmm_movsldup(cpu, {d});"); return Some(out);} None }
         Haddps => { if let (Some(d),Some(s))=(dreg,sreg){ let _=writeln!(out,"  gow_xmm_hadd(cpu, {d}, {s});"); return Some(out);} None }
-        Blendps => { if let (Some(d),Some(s))=(dreg,sreg){ let _=writeln!(out,"  gow_xmm_blendps(cpu, {d}, {s}, {});", insn.immediate8()); return Some(out);} None }
+        Blendps | Vblendps => { let s=load_src(&mut out); if let (Some(d),Some(s))=(dreg,s){ let _=writeln!(out,"  gow_xmm_blendps(cpu, {d}, {s}, {});", insn.immediate8()); return Some(out);} None }
+        Vpermilps => {
+            // permilps with imm8 control applies to one source; with a variable
+            // control it uses two. Handle the immediate form (common).
+            if insn.op2_kind() == OpKind::Immediate8 {
+                if let Some(d)=dreg { let s = if insn.op1_kind()==OpKind::Memory { let _=writeln!(out,"  gow_load_xmm(cpu, {SCRATCH}, {});", mem_expr(insn, image_base)); SCRATCH } else { sreg? };
+                    let _=writeln!(out,"  gow_xmm_permilps(cpu, {d}, {s}, {});", insn.immediate8()); return Some(out); }
+            }
+            None
+        }
         Roundps => { if let Some(d)=dreg { let _=writeln!(out,"  gow_xmm_roundps(cpu, {d}, {});", insn.immediate8()); return Some(out);} None }
-        Insertps => { if let (Some(d),Some(s))=(dreg,sreg){ let _=writeln!(out,"  gow_xmm_insertps(cpu, {d}, {s}, {});", insn.immediate8()); return Some(out);} None }
+        Insertps => { let s=load_src(&mut out); if let (Some(d),Some(s))=(dreg,s){ let _=writeln!(out,"  gow_xmm_insertps(cpu, {d}, {s}, {});", insn.immediate8()); return Some(out);} None }
         _ => None,
     }
 }

@@ -348,3 +348,18 @@ pub unsafe extern "C" fn gow_xmm_pmovmskb_val(cpu: *mut GowCpu, src: i32) -> u64
     }
     m
 }
+
+#[no_mangle]
+pub unsafe extern "C" fn gow_xmm_set_lane1(cpu: *mut GowCpu, reg: i32, v: u64) {
+    (*cpu).xmm[reg as usize].0[1] = v;
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn gow_xmm_permilps(cpu: *mut GowCpu, dst: i32, src: i32, imm: u32) {
+    let c = &mut *cpu;
+    let a = crate::dispatch::LANES32(c.xmm[src as usize].0);
+    let mut o = [0u32; 4];
+    for i in 0..4 { o[i] = a[((imm >> (2 * i)) & 3) as usize]; }
+    c.xmm[dst as usize].0[0] = o[0] as u64 | (o[1] as u64) << 32;
+    c.xmm[dst as usize].0[1] = o[2] as u64 | (o[3] as u64) << 32;
+}

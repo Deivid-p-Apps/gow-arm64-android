@@ -134,11 +134,13 @@ void     gow_xmm_punpck32(GowCpu* cpu, int dst, int src, uint32_t elem, uint32_t
 void     gow_xmm_punpck_wd(GowCpu* cpu, int dst, int src, uint32_t hi);
 void     gow_xmm_punpck_qdq(GowCpu* cpu, int dst, int src, uint32_t hi);
 void     gow_xmm_movhpd(GowCpu* cpu, int dst, int src);
+void     gow_xmm_set_lane1(GowCpu* cpu, int reg, uint64_t v);
 uint64_t gow_xmm_pmovmskb_val(GowCpu* cpu, int src);
 void     gow_xmm_movshdup(GowCpu* cpu, int reg);
 void     gow_xmm_movsldup(GowCpu* cpu, int reg);
 void     gow_xmm_hadd(GowCpu* cpu, int dst, int src);
 void     gow_xmm_blendps(GowCpu* cpu, int dst, int src, uint32_t imm);
+void     gow_xmm_permilps(GowCpu* cpu, int dst, int src, uint32_t imm);
 void     gow_xmm_roundps(GowCpu* cpu, int reg, uint32_t imm);
 void     gow_xmm_insertps(GowCpu* cpu, int dst, int src, uint32_t imm);
 void     gow_unimpl(GowCpu* cpu, uint32_t rva, uint32_t mnemonic);
