@@ -10,6 +10,7 @@
 #include "gow_cpu.h"
 
 typedef void (*GowFunc)(GowCpu*);
+typedef struct { uint32_t rva; GowFunc fn; } GowFuncEntry;
 
 /* Register access into the flat 64-bit GPR file. */
 #define GOW_REG(cpu, name) ((cpu)->gpr.name)
@@ -45,6 +46,8 @@ void gow_jump(GowCpu* cpu, uint32_t target_rva);   /* also used for jcc taken */
 void gow_call_indirect(GowCpu* cpu, uint64_t target_va);
 void gow_ret(GowCpu* cpu);
 void gow_import_call(GowCpu* cpu, uint32_t iat_rva); /* Win32/NT API from IAT */
+void gow_trampoline(GowCpu* cpu, uint32_t target_rva);
+void gow_call_ptr(GowCpu* cpu, uint64_t target_va);
 
 /* --- xmm helpers (scalar + packed, minimal but exact) ------------------- */
 void     gow_xmm_movaps(GowCpu* cpu, int dst, int src);

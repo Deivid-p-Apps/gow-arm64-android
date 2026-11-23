@@ -59,6 +59,10 @@ pub struct GowCpu {
     pub image_base: u64,
     pub image_size: u64,
     pub image: *mut u8,
+    /// Owns the backing allocation for `image` (kept alive with the CPU).
+    pub image_buf: Vec<u8>,
+    /// Owns the guest stack allocation.
+    pub stack_buf: Vec<u8>,
     pub func_map: HashMap<u32, GowFunc>,
     pub teb: u64,
     pub call_depth: u32,
@@ -80,9 +84,12 @@ pub struct GowFuncEntry { pub rva: u32, pub fnptr: Option<GowFunc> }
 
 impl GowCpu {
     pub fn new(image_base: u64, image_size: usize) -> Box<Self> {
-        let mut image = vec![0u8; image_size];
+        let mut image_buf = vec![0u8; image_size];
+        let mut stack = vec![0u8; 8 * 1024 * 1024];
+        let rsp = unsafe { stack.as_mut_ptr().add(stack.len()) as u64 }; // grows down
+        let image = image_buf.as_mut_ptr();
         Box::new(GowCpu {
-            gpr: Gprs { rsp: 0x7fff_0000_0000, ..Default::default() },
+            gpr: Gprs { rsp, ..Default::default() },
             xmm: [Xmm::default(); 17],
             rip: 0,
             flags: 0,
@@ -92,7 +99,9 @@ impl GowCpu {
             heap_size: 0,
             image_base,
             image_size: image_size as u64,
-            image: image.as_mut_ptr(),
+            image,
+            image_buf,
+            stack_buf: stack,
             func_map: HashMap::new(),
             teb: 0x7fff_8000_0000,
             call_depth: 0,
@@ -375,6 +384,23 @@ pub unsafe extern "C" fn gow_jump(cpu: *mut GowCpu, target_rva: u32) {
     (*cpu).next_rva = target_rva;
 }
 
+/// Fallback for a `call` whose target is in-image but is not a known function
+/// entry (computed target, thunk, or code the discovery pass did not list).
+/// Records the miss and returns; it never silently executes the wrong code.
+#[no_mangle]
+pub unsafe extern "C" fn gow_trampoline(cpu: *mut GowCpu, target_rva: u32) {
+    let c = &mut *cpu;
+    c.missing_indirect_calls += 1;
+    if c.missing_indirect_calls <= 64 {
+        eprintln!("[gow] trampoline miss -> rva=0x{target_rva:x} (no lifted entry)");
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn gow_call_ptr(cpu: *mut GowCpu, target_va: u64) {
+    gow_call_indirect(cpu, target_va);
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn gow_call_indirect(cpu: *mut GowCpu, target_va: u64) {
     let c = &mut *cpu;
@@ -391,11 +417,12 @@ pub unsafe extern "C" fn gow_call_indirect(cpu: *mut GowCpu, target_va: u64) {
 #[no_mangle]
 pub unsafe extern "C" fn gow_ret(cpu: *mut GowCpu) {
     let c = &mut *cpu;
-    if c.call_depth == 0 {
+    let r = gow_pop64(cpu) as u32;
+    // Sentinel pushed by gow_run when entering the outermost function ends the run.
+    if r == STOP_RVA {
         c.next_rva = STOP_RVA;
         return;
     }
-    let r = gow_pop64(cpu) as u32;
     c.next_rva = r;
 }
 
@@ -429,6 +456,61 @@ thread_local! {
 
 pub fn set_import_resolver(r: std::sync::Arc<crate::win32::ImportResolver>) {
     IMPORT_RESOLVER.with(|slot| *slot.borrow_mut() = Some(r));
+}
+
+// ---------------------------------------------------------------------------
+// C ABI shims for host-side end-to-end tests (ctest/flow_runner.c)
+// ---------------------------------------------------------------------------
+
+#[no_mangle]
+pub extern "C" fn gow_cpu_new(image_base: u64, image_size: u64) -> *mut GowCpu {
+    // Box keeps the image buffer alive for the CPU's lifetime.
+    Box::into_raw(GowCpu::new(image_base, image_size as usize))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn gow_register_fn(cpu: *mut GowCpu, rva: u32, f: GowFunc) {
+    (*cpu).func_map.insert(rva, f);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn gow_run_c(cpu: usize, entry_rva: u32) {
+    let c = cpu as *mut GowCpu;
+    // Route through gow_run but using the cpu's own func_map (already filled).
+    (*c).call_depth = 1;
+    gow_push64(c, STOP_RVA as u64);
+    (*c).next_rva = entry_rva;
+    let mut map_tmp: HashMap<u32, GowFunc> = std::mem::take(&mut (*c).func_map);
+    std::mem::swap(&mut map_tmp, &mut (*c).func_map);
+    gow_loop(c);
+}
+
+unsafe fn gow_loop(c: *mut GowCpu) {
+    let cc = &mut *c;
+    let mut steps: u64 = 0;
+    while cc.next_rva != STOP_RVA {
+        let rva = cc.next_rva;
+        cc.rip = cc.image_base + rva as u64;
+        cc.next_rva = STOP_RVA;
+        if let Some(f) = cc.func_map.get(&rva).copied() {
+            f(c);
+        } else {
+            cc.unimpl_hits += 1;
+        }
+        steps += 1;
+        if steps > 5_000_000_000 { break; }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn gow_get_gpr(cpu: *mut GowCpu, idx: i32) -> u64 {
+    let g = (*cpu).gpr;
+    match idx { 0=>g.rax,1=>g.rcx,2=>g.rdx,3=>g.rbx,4=>g.rsp,5=>g.rbp,6=>g.rsi,7=>g.rdi,_=>0 }
+}
+#[no_mangle]
+pub unsafe extern "C" fn gow_set_gpr(cpu: *mut GowCpu, idx: i32, v: u64) {
+    let c = &mut *cpu;
+    match idx { 0=>c.gpr.rax=v,1=>c.gpr.rcx=v,2=>c.gpr.rdx=v,3=>c.gpr.rbx=v,4=>c.gpr.rsp=v,5=>c.gpr.rbp=v,6=>c.gpr.rsi=v,7=>c.gpr.rdi=v,_=>{} }
 }
 
 #[no_mangle]
@@ -1149,6 +1231,9 @@ pub unsafe extern "C" fn gow_enter(cpu: *mut GowCpu, frame: u64, level: u64) {
 pub unsafe extern "C" fn gow_run(cpu: *mut GowCpu, entry_rva: u32) {
     let c = &mut *cpu;
     let map: HashMap<u32, GowFunc> = registry().iter().cloned().collect();
+    c.func_map = map;
+    // Push a sentinel so the outermost `ret` ends the dispatch loop.
+    gow_push64(cpu, STOP_RVA as u64);
     c.next_rva = entry_rva;
     let mut steps: u64 = 0;
     while c.next_rva != STOP_RVA {

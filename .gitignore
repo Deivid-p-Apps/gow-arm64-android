@@ -33,3 +33,7 @@ android/.cxx/
 *.swp
 .DS_Store
 android/gradle/wrapper/gradle-wrapper.jar
+ctest/
+artifacts/
+*.log
+mn.txt
