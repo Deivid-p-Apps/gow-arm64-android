@@ -130,6 +130,13 @@ uint64_t gow_x87_fstsw(GowCpu* cpu);
 uint64_t gow_x87_fnstcw(GowCpu* cpu);
 void     gow_x87_fldcw(GowCpu* cpu, uint64_t v);
 void     gow_x87_init(GowCpu* cpu);
+void     gow_x87_fild(GowCpu* cpu, uint64_t raw, uint32_t size_bits);
+double   gow_x87_i2f(GowCpu* cpu, uint64_t raw, uint32_t size_bits);
+int64_t  gow_x87_fist(GowCpu* cpu, uint32_t size_bits, uint32_t pop, uint32_t trunc);
+void     gow_x87_fcmov(GowCpu* cpu, uint32_t i, uint32_t cc);
+void     gow_x87_fnstenv(GowCpu* cpu, uint64_t addr);
+void     gow_x87_fldenv(GowCpu* cpu, uint64_t addr);
+void     gow_x87_frstor(GowCpu* cpu, uint64_t addr);
 void     gow_xmm_punpck32(GowCpu* cpu, int dst, int src, uint32_t elem, uint32_t hi);
 void     gow_xmm_punpck_wd(GowCpu* cpu, int dst, int src, uint32_t hi);
 void     gow_xmm_punpck_qdq(GowCpu* cpu, int dst, int src, uint32_t hi);
@@ -143,6 +150,9 @@ void     gow_xmm_blendps(GowCpu* cpu, int dst, int src, uint32_t imm);
 void     gow_xmm_permilps(GowCpu* cpu, int dst, int src, uint32_t imm);
 void     gow_xmm_roundps(GowCpu* cpu, int reg, uint32_t imm);
 void     gow_xmm_insertps(GowCpu* cpu, int dst, int src, uint32_t imm);
+void     gow_xmm_addsubps(GowCpu* cpu, int dst, int src);
+void     gow_xmm_palignr(GowCpu* cpu, int dst, int src, uint32_t imm);
+uint64_t gow_rcl_rcr(GowCpu* cpu, uint64_t v, uint64_t count, uint32_t size_bits, uint32_t right);
 void     gow_unimpl(GowCpu* cpu, uint32_t rva, uint32_t mnemonic);
 
 /* Drive recompiled code starting at a function entry RVA. */

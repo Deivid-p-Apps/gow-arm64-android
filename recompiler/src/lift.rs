@@ -133,6 +133,14 @@ fn mem_size(insn: &Instruction) -> u32 {
     if b == 0 { 8 } else { b as u32 }
 }
 
+/// Correct size in bytes of the memory operand (iced's `MemorySize::size()` is
+/// already in bytes). Used by handlers added later; the legacy `mem_size` above
+/// predates this and is left untouched to avoid changing existing output.
+fn mem_bytes(insn: &Instruction) -> u32 {
+    let b = insn.memory_size().size() as u32;
+    if b == 0 { 8 } else { b }
+}
+
 /// Load a GPR/imm/mem operand (op index 0/1/2) as a C expression of `width` bits.
 fn operand_read(insn: &Instruction, idx: u32, image_base: u64) -> Option<String> {
     let kind = match idx { 0 => insn.op0_kind(), 1 => insn.op1_kind(), 2 => insn.op2_kind(), _ => return Option::None };
@@ -607,6 +615,23 @@ fn emit(c: &mut String, insn: &Instruction, image_base: u64, iat: &std::collecti
             writeln!(c, "  {{ uint64_t _n = ({cnt}) & 0x3f; uint64_t _a = {a}; uint64_t _r = gow_shift(cpu, _a, _n, {w}, {id}); {store} }}")?;
             return Ok(false);
         }
+        Rcl | Rcr => {
+            // Rotate through CF; the helper masks the count and sets CF (and OF
+            // for a single-bit rotate) exactly.
+            let r = reg_at(insn, 0);
+            let mem = insn.op0_kind() == OpKind::Memory;
+            let w = if mem { mem_bytes(insn) * 8 } else { gpr_width(r) };
+            let a = if mem {
+                format!("gow_load(cpu, {}, {})", mem_expr(insn, image_base), mem_bytes(insn))
+            } else { reg_read(r) };
+            let cnt = operand_read(insn, 1, image_base).unwrap_or_else(|| "1".into());
+            let right = if m == Rcr { 1 } else { 0 };
+            let store = if mem {
+                format!("gow_store(cpu, {}, _r, {});", mem_expr(insn, image_base), mem_bytes(insn))
+            } else { reg_write(r, "_r") };
+            writeln!(c, "  {{ uint64_t _a = {a}; uint64_t _r = gow_rcl_rcr(cpu, _a, ({cnt}), {w}, {right}); {store} }}")?;
+            return Ok(false);
+        }
         Bt | Bts | Btr | Btc => {
             let r = reg_at(insn, 0);
             let w = gpr_width(r);
@@ -792,6 +817,49 @@ fn emit(c: &mut String, insn: &Instruction, image_base: u64, iat: &std::collecti
         }
         Fld1 => { writeln!(c, "  gow_x87_push(cpu, 1.0);")?; return Ok(false); }
         Fldz => { writeln!(c, "  gow_x87_push(cpu, 0.0);")?; return Ok(false); }
+        Fild => {
+            let n = mem_bytes(insn);
+            let addr = mem_expr(insn, image_base);
+            writeln!(c, "  gow_x87_fild(cpu, gow_load(cpu, {addr}, {n}), {});", n * 8)?;
+            return Ok(false);
+        }
+        Fist | Fistp | Fisttp => {
+            let n = mem_bytes(insn);
+            let (pop, trunc) = match m { Fist => (0, 0), Fistp => (1, 0), _ => (1, 1) };
+            let addr = mem_expr(insn, image_base);
+            writeln!(c, "  gow_store(cpu, {addr}, (uint64_t)gow_x87_fist(cpu, {}, {pop}, {trunc}), {n});", n * 8)?;
+            return Ok(false);
+        }
+        Fiadd | Fimul | Fisub | Fisubr | Fidiv | Fidivr => {
+            // Integer memory operand is converted to f64, then the existing
+            // st0-op-m helper performs the arithmetic exactly.
+            let op = match m { Fiadd=>0u32, Fisub=>1, Fimul=>2, Fidiv=>3, Fisubr=>4, Fidivr=>5, _=>0 };
+            let n = mem_bytes(insn);
+            let addr = mem_expr(insn, image_base);
+            writeln!(c, "  gow_x87_arith_m(cpu, gow_x87_i2f(cpu, gow_load(cpu, {addr}, {n}), {}), {op}, 0);", n * 8)?;
+            return Ok(false);
+        }
+        Ficomp => {
+            let n = mem_bytes(insn);
+            let addr = mem_expr(insn, image_base);
+            writeln!(c, "  gow_x87_com_m(cpu, gow_x87_i2f(cpu, gow_load(cpu, {addr}, {n}), {}), 1);", n * 8)?;
+            return Ok(false);
+        }
+        Fcmovb | Fcmove | Fcmovbe | Fcmovu | Fcmovnb | Fcmovne | Fcmovnbe | Fcmovnu => {
+            let i = x87_index(insn.op1_register() as u32);
+            let cc = match m {
+                Fcmovb => 2u32, Fcmove => 4, Fcmovbe => 6, Fcmovu => 10,
+                Fcmovnb => 3, Fcmovne => 5, Fcmovnbe => 7, _ => 11,
+            };
+            writeln!(c, "  gow_x87_fcmov(cpu, {i}, {cc});")?;
+            return Ok(false);
+        }
+        Fstpnce => {
+            let i = x87_index(insn.op0_register() as u32);
+            writeln!(c, "  gow_x87_set(cpu, {i}, gow_x87_get(cpu, 0));")?;
+            writeln!(c, "  gow_x87_pop(cpu);")?;
+            return Ok(false);
+        }
         Fst | Fstp => {
             let pop = m == Fstp;
             if insn.op0_kind() == OpKind::Memory {
@@ -847,11 +915,33 @@ fn emit(c: &mut String, insn: &Instruction, image_base: u64, iat: &std::collecti
         Fucomi | Fcomi => { let i = x87_index(insn.op0_register() as u32); writeln!(c, "  gow_x87_fucomi(cpu, {i}, 0);")?; return Ok(false); }
         Fxch => { let i = x87_index(insn.op0_register() as u32); writeln!(c, "  gow_x87_fxch(cpu, {i});")?; return Ok(false); }
         Fnstsw | Fstsw => { writeln!(c, "  *(uint16_t*)(uintptr_t)({}) = (uint16_t)gow_x87_fstsw(cpu);", mem_expr(insn, image_base))?; return Ok(false); }
+        Fnstenv => { writeln!(c, "  gow_x87_fnstenv(cpu, {});", mem_expr(insn, image_base))?; return Ok(false); }
+        Fldenv => { writeln!(c, "  gow_x87_fldenv(cpu, {});", mem_expr(insn, image_base))?; return Ok(false); }
+        Frstor => { writeln!(c, "  gow_x87_frstor(cpu, {});", mem_expr(insn, image_base))?; return Ok(false); }
         Fnstcw | Fstcw => { writeln!(c, "  *(uint16_t*)(uintptr_t)({}) = (uint16_t)gow_x87_fnstcw(cpu);", mem_expr(insn, image_base))?; return Ok(false); }
         Fldcw => { writeln!(c, "  gow_x87_fldcw(cpu, gow_load(cpu, {}, 2));", mem_expr(insn, image_base))?; return Ok(false); }
         Fninit | Finit => { writeln!(c, "  gow_x87_init(cpu);")?; return Ok(false); }
         Ffree | Fdecstp | Fincstp | Fnop | Fclex | Fnclex | Wait => { return Ok(false); }
         Int3 | Int | Int1 => { return Ok(false); }  // debugger traps: ignore in a port
+        // --- privileged / no-state ops ------------------------------------
+        // These only turn up in the image in regions that decode as data; the
+        // game never relies on their effect, so a no-op (or a plausible value
+        // for XGETBV) is the honest, harmless lowering.
+        Reservednop | Hlt | Clts | Invd | Wbinvd => { return Ok(false); }
+        Sgdt => {
+            // m16&64 (10 bytes in 64-bit mode): 2-byte limit then 8-byte base.
+            // We do not model the GDT, so store a null descriptor rather than
+            // inventing one.
+            let addr = mem_expr(insn, image_base);
+            writeln!(c, "  gow_store(cpu, {addr}, 0, 2);")?;
+            writeln!(c, "  gow_store(cpu, {addr} + 2, 0, 8);")?;
+            return Ok(false);
+        }
+        Xgetbv => {
+            // Return XCR0 = x87|SSE|AVX (all supported OS state bits) in RDX:RAX.
+            writeln!(c, "  {{ uint32_t _x = (uint32_t)(GOW_REG(cpu, rcx) & 0xffffffffull); uint64_t _v = (_x == 0) ? 0x7ull : 0ull; GOW_REG(cpu, rax) = _v; GOW_REG(cpu, rdx) = 0; }}")?;
+            return Ok(false);
+        }
         _ => {}
     }
 
@@ -1142,6 +1232,14 @@ fn emit_sse(insn: &Instruction, image_base: u64) -> Option<String> {
         }
         Roundps => { if let Some(d)=dreg { let _=writeln!(out,"  gow_xmm_roundps(cpu, {d}, {});", insn.immediate8()); return Some(out);} None }
         Insertps => { let s=load_src(&mut out); if let (Some(d),Some(s))=(dreg,s){ let _=writeln!(out,"  gow_xmm_insertps(cpu, {d}, {s}, {});", insn.immediate8()); return Some(out);} None }
+        Addsubps => { let s=load_src(&mut out); if let (Some(d),Some(s))=(dreg,s){ let _=writeln!(out,"  gow_xmm_addsubps(cpu, {d}, {s});"); return Some(out);} None }
+        Palignr => {
+            // 64-bit MMX form is not used here; only lower the 128-bit XMM form.
+            if insn.op0_register().size() != 16 { return None; }
+            let s = load_src(&mut out);
+            if let (Some(d),Some(s))=(dreg,s){ let _=writeln!(out,"  gow_xmm_palignr(cpu, {d}, {s}, {});", insn.immediate8()); return Some(out);}
+            None
+        }
         _ => None,
     }
 }

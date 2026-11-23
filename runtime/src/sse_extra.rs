@@ -412,16 +412,16 @@ pub unsafe extern "C" fn gow_rcl_rcr(cpu: *mut GowCpu, v: u64, count: u64, size_
     use crate::dispatch::{CF, OF};
     let bits = size_bits.clamp(8, 64);
     let mask: u64 = if bits == 64 { u64::MAX } else { (1u64 << bits) - 1 };
-    let n = count & if bits == 64 { 0x3f } else { 0x1f };
+    let n: u64 = count & if bits == 64 { 0x3f } else { 0x1f };
     let c = &mut *cpu;
     if n == 0 {
         return v & mask; // zero-bit rotate changes no flags
     }
     let cf_in = if c.flags & CF != 0 { 1u128 } else { 0u128 };
-    let width = bits + 1;
+    let width: u32 = bits + 1;
     let m = (1u128 << width) - 1;
     let mut q = (cf_in << bits) | (v as u128 & mask as u128);
-    let sh = (n % width) as u32;
+    let sh = (n % width as u64) as u32;
     q = if right != 0 {
         ((q >> sh) | (q << (width - sh))) & m
     } else {
