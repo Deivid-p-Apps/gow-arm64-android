@@ -96,6 +96,13 @@ void     gow_xmm_to_gpr_val(GowCpu* cpu, int dst, uint64_t v);
 uint64_t gow_xmm_lane0(GowCpu* cpu, int reg);
 void     gow_xmm_movd_reg(GowCpu* cpu, int dst, int src, uint32_t movq);
 uint64_t gow_xmm_movmsk_val(GowCpu* cpu, int src);
+void     gow_movs(GowCpu* cpu, uint32_t size);
+void     gow_lods(GowCpu* cpu, uint32_t size);
+void     gow_scas(GowCpu* cpu, uint32_t size);
+void     gow_cmps(GowCpu* cpu, uint32_t size);
+void     gow_enter(GowCpu* cpu, uint64_t frame, uint64_t level);
+void     gow_ldmxcsr(GowCpu* cpu, uint64_t addr);
+void     gow_stmxcsr(GowCpu* cpu, uint64_t addr);
 void     gow_unimpl(GowCpu* cpu, uint32_t rva, uint32_t mnemonic);
 
 /* Drive recompiled code starting at a function entry RVA. */

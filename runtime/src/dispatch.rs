@@ -51,6 +51,7 @@ pub struct GowCpu {
 
     pub rip: u64,
     pub flags: u64,
+    pub mxcsr: u32,
     /// Next function RVA selected by the last control-flow helper. u32::MAX = stop.
     pub next_rva: u32,
     pub heap_base: u64,
@@ -85,6 +86,7 @@ impl GowCpu {
             xmm: [Xmm::default(); 17],
             rip: 0,
             flags: 0,
+            mxcsr: 0x1f80,
             next_rva: STOP_RVA,
             heap_base: 0x1_0000_0000,
             heap_size: 0,
@@ -1077,6 +1079,69 @@ pub unsafe extern "C" fn gow_xmm_movmsk_val(cpu: *mut GowCpu, src: i32) -> u64 {
     let mut m = 0u64;
     for i in 0..2 { if lanes[i] & 0x8000_0000 != 0 { m |= 1 << i; } }
     m
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn gow_ldmxcsr(cpu: *mut GowCpu, addr: u64) {
+    (*cpu).mxcsr = *(addr as *const u32);
+}
+#[no_mangle]
+pub unsafe extern "C" fn gow_stmxcsr(cpu: *mut GowCpu, addr: u64) {
+    *(addr as *mut u32) = (*cpu).mxcsr;
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn gow_movs(cpu: *mut GowCpu, size: u32) {
+    let c = &mut *cpu;
+    let dir = c.flags & DF != 0;
+    let step = (size as u64) * if dir { u64::MAX } else { 1 };
+    let v = gow_load(cpu, c.gpr.rsi, size);
+    gow_store(cpu, c.gpr.rdi, v, size);
+    c.gpr.rsi = c.gpr.rsi.wrapping_add(step);
+    c.gpr.rdi = c.gpr.rdi.wrapping_add(step);
+}
+#[no_mangle]
+pub unsafe extern "C" fn gow_lods(cpu: *mut GowCpu, size: u32) {
+    let c = &mut *cpu;
+    let dir = c.flags & DF != 0;
+    let step = (size as u64) * if dir { u64::MAX } else { 1 };
+    let v = gow_load(cpu, c.gpr.rsi, size);
+    let mask = if size == 8 { u64::MAX } else { (1u64 << (size*8)) - 1 };
+    c.gpr.rax = (c.gpr.rax & !mask) | (v & mask);
+    c.gpr.rsi = c.gpr.rsi.wrapping_add(step);
+}
+#[no_mangle]
+pub unsafe extern "C" fn gow_scas(cpu: *mut GowCpu, size: u32) {
+    let c = &mut *cpu;
+    let dir = c.flags & DF != 0;
+    let step = (size as u64) * if dir { u64::MAX } else { 1 };
+    let v = gow_load(cpu, c.gpr.rdi, size);
+    let a = if size == 8 { c.gpr.rax } else { c.gpr.rax & ((1u64 << (size*8)) - 1) };
+    gow_sub64(cpu, a, v, size * 8);
+    c.gpr.rdi = c.gpr.rdi.wrapping_add(step);
+}
+#[no_mangle]
+pub unsafe extern "C" fn gow_cmps(cpu: *mut GowCpu, size: u32) {
+    let c = &mut *cpu;
+    let dir = c.flags & DF != 0;
+    let step = (size as u64) * if dir { u64::MAX } else { 1 };
+    let a = gow_load(cpu, c.gpr.rsi, size);
+    let b = gow_load(cpu, c.gpr.rdi, size);
+    gow_sub64(cpu, a, b, size * 8);
+    c.gpr.rsi = c.gpr.rsi.wrapping_add(step);
+    c.gpr.rdi = c.gpr.rdi.wrapping_add(step);
+}
+#[no_mangle]
+pub unsafe extern "C" fn gow_enter(cpu: *mut GowCpu, frame: u64, level: u64) {
+    let c = &mut *cpu;
+    gow_push64(cpu, c.gpr.rbp);
+    let sp = c.gpr.rsp;
+    if level > 0 {
+        for _ in 1..level { c.gpr.rbp = c.gpr.rbp.wrapping_sub(8); gow_push64(cpu, gow_load(cpu, c.gpr.rbp, 8)); }
+        gow_push64(cpu, sp);
+    }
+    c.gpr.rbp = sp;
+    c.gpr.rsp = c.gpr.rsp.wrapping_sub(frame);
 }
 
 /// Central dispatch loop. Runs until next_rva == STOP_RVA.

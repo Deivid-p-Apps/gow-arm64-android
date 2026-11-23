@@ -16,8 +16,8 @@ typedef struct GowCpu {
     GowXmm   xmm[17];      /* XMM0..15 + scratch slot 16 */
     uint64_t rip;
     uint64_t flags;
+    uint32_t mxcsr;
     uint32_t next_rva;
-    uint32_t _pad0;
     /* --- fields below are Rust-side only; opaque to generated code --- */
     uint64_t heap_base;
     uint64_t heap_size;

@@ -244,6 +244,12 @@ pub fn lift(pe: &PeImage, out_dir: &std::path::Path) -> Result<LiftOutput> {
             let mut insn = Instruction::default();
             while dec.can_decode() {
                 dec.decode_out(&mut insn);
+                // Invalid bytes inside a .pdata range are padding/data, not code.
+                // Stop the function here instead of emitting spurious traps.
+                if insn.is_invalid() {
+                    writeln!(sc, "  /* stop: invalid/padding at 0x{:x} */", (insn.ip().wrapping_sub(image_base)) as u32)?;
+                    break;
+                }
                 insn_count += 1;
                 let rva = (insn.ip().wrapping_sub(image_base)) as u32;
                 let mut text = String::new();
@@ -625,6 +631,11 @@ fn emit(c: &mut String, insn: &Instruction, image_base: u64, iat: &std::collecti
         Pushf | Pushfq => { writeln!(c, "  gow_push64(cpu, gow_popfq(cpu));")?; return Ok(false); }
         Popf | Popfq => { writeln!(c, "  GOW_FLAGS(cpu) = gow_pop64(cpu);")?; return Ok(false); }
         Cpuid => { writeln!(c, "  gow_cpuid(cpu);")?; return Ok(false); }
+        Ldmxcsr => { writeln!(c, "  gow_ldmxcsr(cpu, {});", mem_expr(insn, image_base))?; return Ok(false); }
+        Stmxcsr => { writeln!(c, "  gow_stmxcsr(cpu, {});", mem_expr(insn, image_base))?; return Ok(false); }
+        Prefetchnta | Prefetcht0 | Prefetcht1 | Prefetcht2 | Prefetchw | Prefetchwt1 => {
+            return Ok(false); // architectural hint; no state change
+        }
         _ => {}
     }
 
@@ -660,6 +671,35 @@ fn emit(c: &mut String, insn: &Instruction, image_base: u64, iat: &std::collecti
             }
             return Ok(false);
         }
+        Movsb | Movsw | Movsd | Movsq => {
+            let sz = match m { Movsb => 1, Movsw => 2, Movsd => 4, _ => 8 };
+            // movsd is ambiguous with the SSE scalar load (handled in emit_sse
+            // before this match); reaching here means the string form.
+            writeln!(c, "  gow_movs(cpu, {sz});")?;
+            return Ok(false);
+        }
+        Lodsb | Lodsw | Lodsd | Lodsq => {
+            let sz = match m { Lodsb => 1, Lodsw => 2, Lodsd => 4, _ => 8 };
+            writeln!(c, "  gow_lods(cpu, {sz});")?;
+            return Ok(false);
+        }
+        Scasb | Scasw | Scasd | Scasq => {
+            let sz = match m { Scasb => 1, Scasw => 2, Scasd => 4, _ => 8 };
+            writeln!(c, "  gow_scas(cpu, {sz});")?;
+            return Ok(false);
+        }
+        Cmpsq | Cmpsd | Cmpsw | Cmpsb => {
+            let sz = match m { Cmpsb => 1, Cmpsw => 2, Cmpsd => 4, _ => 8 };
+            writeln!(c, "  gow_cmps(cpu, {sz});")?;
+            return Ok(false);
+        }
+        Enter => {
+            let frame = insn.immediate16() as u64;
+            let level = insn.immediate8() as u64 & 0x1f;
+            writeln!(c, "  gow_enter(cpu, {frame}, {level});")?;
+            return Ok(false);
+        }
+        Xlatb => { writeln!(c, "  GOW_REG(cpu, rax) = (GOW_REG(cpu, rax) & 0xffffffffffffff00ull) | (uint64_t)(*(uint8_t*)(GOW_REG(cpu, rbx) + (GOW_REG(cpu, rax) & 0xff)));")?; return Ok(false); }
         _ => {}
     }
 
