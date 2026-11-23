@@ -14,12 +14,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Build workspace
         run: cargo build --workspace --release
+      - name: Unit tests (flag/cc semantics)
+        run: cargo test -p gow-runtime --release
       - name: Run recompiler self-test on synthetic PE
         run: |
-          python3 tools/make_test_pe.py > /tmp/test_pe.bin
-          ./target/release/gowrecomp /tmp/test_pe.bin generated
-          test -f generated/gow_game.c
-          test -f generated/manifest.json
+          python3 tools/make_test_pe.py > test_pe.bin
+          ./target/release/gowrecomp test_pe.bin generated
+          test -f generated/gow_table.c
+          grep -q "gow_func_table" generated/gow_table.c
       - uses: actions/upload-artifact@v4
         with:
           name: gowrecomp-tools
@@ -45,7 +47,7 @@ jobs:
           targets: aarch64-linux-android
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
-      - name: Build runtime for arm64
+      - name: Build runtime + jni for arm64
         run: |
           export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
           cargo ndk -t arm64-v8a -o android/app/src/main/jniLibs build -p gow-runtime --release
