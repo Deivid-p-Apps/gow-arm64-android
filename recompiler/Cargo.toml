@@ -1,0 +1,17 @@
+[package]
+name = "gow-recompiler"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Static x86-64 -> aarch64 recompiler for God of War (2018) PC"
+
+[[bin]]
+name = "gowrecomp"
+path = "src/main.rs"
+
+[dependencies]
+iced-x86 = { version = "1.21", default-features = false, features = ["std", "decoder", "instr_info", "nasm"] }
+anyhow = "1"
+
+[dev-dependencies]
+tempfile = "3"

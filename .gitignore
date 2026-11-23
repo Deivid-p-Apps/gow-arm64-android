@@ -1,0 +1,34 @@
+# Build artifacts
+/target
+**/*.rs.bk
+Cargo.lock
+
+# Generated recompiled game code (never committed: derived from game files)
+/generated
+/gen
+/**/out/*.c
+/**/out/*.rs
+
+# Game files must never enter the repo
+*.exe
+*.dll
+*.asi
+*.bk2
+*.zip
+*.adpkg
+GodOfWar/
+god/
+
+# Android
+*.apk
+*.aab
+.gradle/
+/local.properties
+build/
+android/.cxx/
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store

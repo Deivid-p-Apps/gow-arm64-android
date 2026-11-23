@@ -1,0 +1,60 @@
+name: build
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  recompiler:
+    name: Build recompiler + runtime (host)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build workspace
+        run: cargo build --workspace --release
+      - name: Run recompiler self-test on synthetic PE
+        run: |
+          python3 tools/make_test_pe.py > /tmp/test_pe.bin
+          ./target/release/gowrecomp /tmp/test_pe.bin generated
+          test -f generated/gow_game.c
+          test -f generated/manifest.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gowrecomp-tools
+          path: |
+            target/release/gowrecomp
+            tools/
+
+  android:
+    name: Build Android runtime APK (arm64-v8a)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Android SDK/NDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-34 build-tools;34.0.0 ndk;27.2.12479018 cmake;3.22.1'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+      - name: Build runtime for arm64
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
+          cargo ndk -t arm64-v8a -o android/app/src/main/jniLibs build -p gow-runtime --release
+      - name: Assemble debug APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gow-debug-apk
+          path: android/app/build/outputs/apk/debug/*.apk
