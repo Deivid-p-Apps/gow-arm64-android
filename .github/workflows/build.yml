@@ -22,6 +22,16 @@ jobs:
           ./target/release/gowrecomp test_pe.bin generated
           test -f generated/gow_table.c
           grep -q "gow_func_table" generated/gow_table.c
+      - name: End-to-end control-flow test (lift a 2-function program and run it)
+        run: |
+          python3 tools/make_flow_pe.py > flow.bin
+          ./target/release/gowrecomp flow.bin flowout
+          clang -O2 -I runtime/include -I flowout tests/flow_runner.c \
+            flowout/gow_shard_000.c flowout/gow_table.c \
+            -L target/release -lgow_runtime -lpthread -ldl -Wl,-rpath,target/release \
+            -o flow_runner
+          ./flow_runner | tee flow_result.txt
+          grep -q "rax=15" flow_result.txt
       - uses: actions/upload-artifact@v4
         with:
           name: gowrecomp-tools

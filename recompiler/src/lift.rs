@@ -239,22 +239,43 @@ pub fn lift(pe: &PeImage, out_dir: &std::path::Path) -> Result<LiftOutput> {
 
             writeln!(sc, "void f_{entry_rva:x}(GowCpu* cpu) {{")?;
             func_count += 1;
+
+            // First pass: decode the whole range, recording every valid
+            // instruction start. Invalid bytes (padding) are skipped one at a
+            // time so branch targets past them are still discovered.
+            let mut starts: BTreeSet<u32> = BTreeSet::new();
+            {
+                let mut d = Decoder::with_ip(64, code, image_base + entry_rva as u64, DecoderOptions::NONE);
+                let mut ii = Instruction::default();
+                while d.can_decode() {
+                    let ip = d.ip();
+                    d.decode_out(&mut ii);
+                    if !ii.is_invalid() {
+                        starts.insert((ip - image_base) as u32);
+                    } else {
+                        // skip one byte and continue (robust to embedded data)
+                        d.set_position((d.position() - ii.len()) + 1);
+                    }
+                }
+            }
+
             let mut dec = Decoder::with_ip(64, code, image_base + entry_rva as u64, DecoderOptions::NONE);
             let mut insn = Instruction::default();
             while dec.can_decode() {
+                let pos_before = dec.position();
                 dec.decode_out(&mut insn);
                 let rva = (insn.ip().wrapping_sub(image_base)) as u32;
-                // Label for local-branch targets (harmless if unused).
-                writeln!(sc, "L_{rva:x}: ;")?;
                 if insn.is_invalid() {
-                    writeln!(sc, "  /* stop: invalid/padding at 0x{rva:x} */")?;
-                    break;
+                    // skip this byte; no code emitted
+                    dec.set_position(pos_before + 1);
+                    continue;
                 }
+                writeln!(sc, "L_{rva:x}: ;")?;
                 insn_count += 1;
                 let mut text = String::new();
                 fmt.format(&insn, &mut text);
                 writeln!(sc, "  /* 0x{rva:x}: {text} */")?;
-                emit(&mut sc, &insn, image_base, &iat, entry_rva, range_end, &entries, &mut unimpl, &mut unimpl_instances)?;
+                emit(&mut sc, &insn, image_base, &iat, &starts, entry_rva, range_end, &entries, &mut unimpl, &mut unimpl_instances)?;
             }
             writeln!(sc, "}}\n")?;
         }
@@ -301,14 +322,18 @@ fn trap(c: &mut String, insn: &Instruction, image_base: u64, unimpl: &mut BTreeS
 }
 
 /// Emit C for one instruction. Returns true if it ended the basic block.
-fn emit(c: &mut String, insn: &Instruction, image_base: u64, iat: &std::collections::HashMap<u32,u32>, func_start: u32, func_end: u32, entries: &BTreeSet<u32>, unimpl: &mut BTreeSet<String>, un: &mut u64) -> Result<bool> {
+fn emit(c: &mut String, insn: &Instruction, image_base: u64, iat: &std::collections::HashMap<u32,u32>, starts: &BTreeSet<u32>, func_start: u32, func_end: u32, entries: &BTreeSet<u32>, unimpl: &mut BTreeSet<String>, un: &mut u64) -> Result<bool> {
     use iced_x86::Mnemonic::*;
     let m = insn.mnemonic();
 
-    // Inline a direct `jmp`/`jcc` target that is inside this function as a goto;
-    // otherwise it is a cross-function tail call / external jump.
+    // Inline a direct `jmp`/`jcc` target that is inside this function and is a
+    // real decoded instruction as a goto; otherwise tail-call / trampoline.
     let inline_target = |tgt_rva: u32| -> Option<String> {
-        if tgt_rva >= func_start && tgt_rva < func_end { Some(format!("L_{tgt_rva:x}")) } else { None }
+        if tgt_rva >= func_start && tgt_rva < func_end && starts.contains(&tgt_rva) {
+            Some(format!("L_{tgt_rva:x}"))
+        } else {
+            None
+        }
     };
 
     // --- control flow ---
