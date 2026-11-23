@@ -80,6 +80,42 @@ clang -O2 -I runtime/include -I flowout tests/flow_runner.c \
 CI builds the recompiler and an arm64 debug APK; download the artifact and test on
 the connected device (`adb install -r`, logcat, screencap) — the device is the test rig.
 
+## Progress map
+
+Legend: ✅ done · 🟡 partial · ⬜ not started · 🔒 blocked on game files/hardware
+
+```
+M0  Reconnaissance                     ✅  PE32+ parsed; 7 sections, 579 imports, 61 exports,
+                                           51,869 functions in .pdata; device identified
+M1  Loader + recompiler                ✅  lift 51,869 funcs / 2,754,847 insns, coverage 99.9919%
+                                           (224 traps); generated C compiles (clang -O2, arm64);
+                                           control flow proven end-to-end (rax=15 test)
+M2  Runtime reaches game main          🟡  dispatcher, guest mem/stack, exact int flags, SSE/SSE2/
+                                           AVX subset, x87, MMX; Win32 layer (files/threads/
+                                           sync/heap/time); Steamworks + Sony stubs
+M3  Window + graphics device           🟡  Vulkan bootstrap + android surface + Turnip driver load;
+                                           DXVK Native integration in progress
+M4  Main menu renders                  ⬜
+M5  Gameplay playable                  ⬜
+M6  50+ FPS stable                     ⬜  (hardware ceiling on Adreno 725 — see PERFORMANCE.md)
+M7  Native Rust Vulkan backend         ⬜  (phase 2; DXVK is the phase-1 fallback)
+M8  Polish / robustness                ⬜
+```
+
+```
+Recompiler     [####################] 100%   (whole executable lifted, .so links)
+Runtime core   [################----]  80%   (M2: Win32 layer + COM hostcall in progress)
+Graphics       [######--------------]  30%   (M3: Vulkan up; DXVK not yet building)
+Audio          [########------------]  40%   (XAudio2->AAudio engine + mixer; not wired to device)
+Input          [##########----------]  50%   (XInput->Android model + JNI; overlay pending)
+Android shell  [############--------]  60%   (APK builds/installs/runs; game .so inside)
+CI             [################----]  80%   (recompiler + e2e test + APK; DXVK build not in CI)
+Cache/measure  [--------------------]   0%   (no FPS numbers yet — nothing fabricated)
+```
+
+Live numbers and the honest limits are in [`docs/STATUS.md`](docs/STATUS.md),
+[`docs/PERFORMANCE.md`](docs/PERFORMANCE.md), [`docs/GRAPHICS.md`](docs/GRAPHICS.md).
+
 ## Status
 
 See `docs/STATUS.md` for the phase, what works, what is missing, and known bugs.
@@ -87,13 +123,15 @@ See `docs/STATUS.md` for the phase, what works, what is missing, and known bugs.
 engineering, `docs/PERFORMANCE.md` the measurement methodology, and
 `docs/GRAPHICS.md` the D3D11->Vulkan plan.
 
-Current phase: M1/M2 — the recompiler lifts the whole executable (51,869
-functions, 2,754,847 instructions, 99.987% coverage), the generated C compiles
-with the Android clang, control flow is proven end-to-end, a real arm64 APK
-builds in CI and runs on the connected device, and the runtime provides the
-dispatcher, memory, integer/flags, SSE/SSE2/AVX subset, x87, Win32 file/thread/
-sync layer, and a Vulkan + Turnip driver bootstrap. Still to come: the D3D11
-renderer, audio, input and the game reaching its main.
+Current phase: M1 complete, M2/M3 in progress — the recompiler lifts the whole
+executable (51,869 functions, 2,754,847 instructions, 99.9919% coverage), the
+generated C compiles with the Android clang, control flow is proven end-to-end,
+a real arm64 APK builds in CI and runs on the connected device, and the runtime
+provides the dispatcher, memory, integer/flags, SSE/SSE2/AVX subset, x87, the
+Win32 file/thread/sync layer, a COM hostcall mechanism, the XAudio2→AAudio engine
+and XInput→Android input, plus a Vulkan + Turnip driver bootstrap. Still to come:
+the D3D11 renderer (DXVK Native), the swapchain, wiring audio/input to the device,
+and the game reaching its main.
 
 ## Legal
 
