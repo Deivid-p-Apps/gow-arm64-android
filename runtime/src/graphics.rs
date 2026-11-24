@@ -171,7 +171,7 @@ impl GraphicsBridge {
             };
             if sym.is_null() {
                 crate::glog!(
-                    "[gow.gfx] {dll}: dxvk_vulkan_set_get_instance_proc_addr missing (DXVK built without P7?)"
+                    "[gow.gfx] {dll}: dxvk_vulkan_set_get_instance_proc_addr missing (DXVK built without tools/patches/0005?)"
                 );
                 continue;
             }

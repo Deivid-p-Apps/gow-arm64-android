@@ -152,7 +152,7 @@ jobs:
           "$READELF" --dyn-syms -W dist/libdxvk_dxgi.so | grep -q 'dxvk_android_set_window'
           "$READELF" --dyn-syms -W dist/libdxvk_d3d11.so | grep -q 'D3D11CreateDevice'
           "$READELF" --dyn-syms -W dist/libdxvk_d3d11.so | grep -q 'dxvk_android_set_window'
-          # P7: the runtime hands DXVK the adrenotools loader through this setter.
+          # tools/patches/0005: the runtime hands DXVK the adrenotools loader through this setter.
           "$READELF" --dyn-syms -W dist/libdxvk_dxgi.so | grep -q 'dxvk_vulkan_set_get_instance_proc_addr'
           "$READELF" --dyn-syms -W dist/libdxvk_d3d11.so | grep -q 'dxvk_vulkan_set_get_instance_proc_addr'
           # 16 KB page alignment for Android 15 devices.

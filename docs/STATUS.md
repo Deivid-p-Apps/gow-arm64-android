@@ -61,7 +61,7 @@ Motorola Edge 30 Fusion (`tundra`), SM8350 (Snapdragon 888+), Adreno 725 (Turnip
   do CI, release `adrenotools-latest`): o runtime carrega `libadrenotools.so`,
   chama `adrenotools_open_libvulkan` com o Turnip escolhido no launcher, e passa
   o `vkGetInstanceProcAddr` desse loader tanto para `vk.rs` quanto para os dois
-  DXVK (patch P7, símbolo `dxvk_vulkan_set_get_instance_proc_addr`). Sem driver =
+  DXVK (`tools/patches/0005`, símbolo `dxvk_vulkan_set_get_instance_proc_addr`). Sem driver =
   driver do sistema, nunca crasha. Run verde **45473778373**. Ver
   `docs/GRAPHICS.md` §"Custom driver".
 - [ ] Backend nativo em Rust (fase 2) e confirmar o primeiro frame em tela
