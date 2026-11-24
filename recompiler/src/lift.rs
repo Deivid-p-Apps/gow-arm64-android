@@ -485,28 +485,41 @@ fn emit(c: &mut String, insn: &Instruction, image_base: u64, iat: &std::collecti
             return Ok(true);
         }
         Call => {
+            let ret = (insn.next_ip() - image_base) as u32;
             if insn.op0_kind() == OpKind::NearBranch64 {
                 let t = (insn.near_branch64() - image_base) as u32;
+                // Emulate the x86 `call`: push the return address so the callee's
+                // [rsp]/shadow-space layout matches real hardware, then pop it.
+                writeln!(c, "  gow_push64(cpu, 0x{ret:x}u);")?;
                 if entries.contains(&t) {
                     writeln!(c, "  f_{t:x}(cpu);")?;
                 } else {
                     writeln!(c, "  gow_trampoline(cpu, 0x{t:x}u);")?;
                 }
+                writeln!(c, "  gow_pop64(cpu);")?;
             } else if insn.op0_kind() == OpKind::Memory {
                 // `call qword [rip+disp]` — usually an IAT import thunk.
                 if let Some(va) = mem_target_va(insn, image_base) {
                     if let Some(slot_rva) = iat_slot(iat, va, image_base) {
+                        // Push the return address first so the import handler sees
+                        // the standard MS x64 layout (5th arg at [rsp+0x28]).
+                        writeln!(c, "  gow_push64(cpu, 0x{ret:x}u);")?;
                         writeln!(c, "  gow_import_call(cpu, 0x{slot_rva:x}u);")?;
+                        writeln!(c, "  gow_pop64(cpu);")?;
                         return Ok(false);
                     }
                 }
                 let addr = mem_expr(insn, image_base);
+                writeln!(c, "  gow_push64(cpu, 0x{ret:x}u);")?;
                 writeln!(c, "  gow_call_ptr(cpu, (uint64_t)({addr}));")?;
+                writeln!(c, "  gow_pop64(cpu);")?;
             } else {
+                writeln!(c, "  gow_push64(cpu, 0x{ret:x}u);")?;
                 match operand_read(insn, 0, image_base) {
                     Some(e) => writeln!(c, "  gow_call_ptr(cpu, (uint64_t)({e}));")?,
                     None => { trap(c, insn, image_base, unimpl, un)?; }
                 }
+                writeln!(c, "  gow_pop64(cpu);")?;
             }
             return Ok(false);
         }
