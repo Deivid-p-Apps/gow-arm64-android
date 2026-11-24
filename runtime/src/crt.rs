@@ -216,6 +216,34 @@ pub unsafe fn call(cpu: *mut GowCpu, func: &str) -> bool {
         "_seh_filter_exe" | "_seh_filter_dll" => 0,
         "__sys_nerr" => 0,
         "__acrt_iob_func" => 0x0000_0c00_0000_0000 + a0 * 0x100, // stable fake FILE*
+        "_set_fmode" => 0,
+        "__p__commode" => {
+            // Return a pointer to a stable int holding the commode (0 = text).
+            static COMMODE: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+            &COMMODE as *const _ as u64
+        }
+        "qsort" => {
+            // (base, count, width, compare). Insertion sort using the guest
+            // comparator (a function pointer we call back into).
+            let (base, count, width, cmp) = (a0, a1 as usize, a2 as usize, a3);
+            if width != 0 && count > 1 {
+                for i in 1..count {
+                    let mut j = i;
+                    while j > 0 {
+                        let pa = base + ((j - 1) * width) as u64;
+                        let pb = base + (j * width) as u64;
+                        let r = call_guest_i64(cpu, cmp, pa, pb);
+                        if r <= 0 { break; }
+                        swap_bytes(pa, pb, width);
+                        j -= 1;
+                    }
+                }
+            }
+            0
+        }
+        "_Mtx_init_in_situ" | "_Mtx_destroy_in_situ" => 0,
+        "_Mtx_lock" | "_Mtx_unlock" => 0,
+        "_Mtx_init" | "_Mtx_destroy" => 0,
         // --- setjmp/longjmp (save/restore the guest register file) ---
         "__intrinsic_setjmp" | "_setjmp" | "setjmp" => {
             // Save the guest state into the jmp_buf. Layout (our own, 64 bytes):
@@ -287,6 +315,32 @@ unsafe fn spawn_guest_thread(cpu: *mut GowCpu, start_va: u64, arg: u64) {
 fn cstr(ptr: u64) -> String {
     if ptr == 0 { return String::new(); }
     unsafe { std::ffi::CStr::from_ptr(ptr as *const std::os::raw::c_char).to_string_lossy().into_owned() }
+}
+
+/// Call a guest function (by absolute VA) with two args, returning its RAX as
+/// i64. Used by qsort's comparator callback.
+unsafe fn call_guest_i64(cpu: *mut GowCpu, va: u64, a: u64, b: u64) -> i64 {
+    if va == 0 { return 0; }
+    let c = &mut *cpu;
+    if va < c.image_base || va >= c.image_base + c.image_size { return 0; }
+    let rva = (va - c.image_base) as u32;
+    let save = c.gpr;
+    c.gpr.rcx = a;
+    c.gpr.rdx = b;
+    crate::dispatch::gow_run(cpu, rva);
+    let r = c.gpr.rax as i64;
+    c.gpr = save;
+    r
+}
+
+fn swap_bytes(a: u64, b: u64, n: usize) {
+    unsafe {
+        for i in 0..n {
+            let pa = (a as *mut u8).add(i);
+            let pb = (b as *mut u8).add(i);
+            std::ptr::swap(pa, pb);
+        }
+    }
 }
 
 unsafe fn unsafe_copy_cstr(dst: u64, src: u64) {

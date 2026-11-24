@@ -179,6 +179,28 @@ impl ImportResolver {
             ("kernel32.dll", "IsDebuggerPresent") => { c.gpr.rax = 0; true }
             ("kernel32.dll", "DebugBreak") | ("kernel32.dll", "RaiseException") => { true }
             ("kernel32.dll", "SetLastError") => { true }
+            ("kernel32.dll", "InitializeSListHead") => {
+                // SLIST_HEADER is 16 bytes; zero it.
+                if a0 != 0 { std::ptr::write_bytes(a0 as *mut u8, 0, 16); }
+                true
+            }
+            ("kernel32.dll", "CreateSemaphoreA") | ("kernel32.dll", "CreateSemaphoreW")
+            | ("kernel32.dll", "OpenSemaphoreA") | ("kernel32.dll", "OpenSemaphoreW") => {
+                // Hand out a sync-object handle backed by our event table.
+                c.gpr.rax = self.sync.create_event(true);
+                true
+            }
+            ("kernel32.dll", "ReleaseSemaphore") => {
+                if a2 != 0 { *(a2 as *mut u32) = 0; }
+                c.gpr.rax = 1;
+                true
+            }
+            ("kernel32.dll", "GetCurrentProcessorNumber") => { c.gpr.rax = 0; true }
+            ("kernel32.dll", "SetThreadAffinityMask") => { c.gpr.rax = 1; true }
+            ("kernel32.dll", "SleepEx") | ("kernel32.dll", "WaitForSingleObjectEx") => { c.gpr.rax = 0; true }
+            ("user32.dll", "GetKeyboardLayout") => { c.gpr.rax = 0x0409; true }
+            ("user32.dll", "LoadKeyboardLayoutA") | ("user32.dll", "LoadKeyboardLayoutW") => { c.gpr.rax = 0x0409; true }
+            ("user32.dll", "GetKeyboardLayoutNameA") | ("user32.dll", "GetKeyboardLayoutNameW") => { c.gpr.rax = 1; true }
             // --- Windows version compatibility (the game checks it at startup;
             // returning "not supported" makes it show an error and exit). ---
             ("kernel32.dll", "VerifyVersionInfoW") | ("kernel32.dll", "VerifyVersionInfoA") => {
