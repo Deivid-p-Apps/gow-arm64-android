@@ -169,8 +169,14 @@ fn stage_and_load_driver(src: &str, priv_dir: &str) -> c_int {
 
 /// Extract the driver `.so` from an adrenotools zip into `priv_dir`.
 fn extract_driver_from_zip(zip_path: &std::path::Path, priv_dir: &str) -> Option<String> {
-    let f = std::fs::File::open(zip_path).ok()?;
-    let mut archive = zip::ZipArchive::new(f).ok()?;
+    let f = match std::fs::File::open(zip_path) {
+        Ok(f) => f,
+        Err(e) => { crate::glog!("[gow.driver] open {} failed: {e}", zip_path.display()); return None; }
+    };
+    let mut archive = match zip::ZipArchive::new(f) {
+        Ok(a) => a,
+        Err(e) => { crate::glog!("[gow.driver] zip parse {} failed: {e}", zip_path.display()); return None; }
+    };
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).ok()?;
         let name = entry.name().to_string();
