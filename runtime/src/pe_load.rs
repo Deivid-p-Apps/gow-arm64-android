@@ -5,6 +5,22 @@
 
 use crate::glog;
 
+fn rva_to_off(b: &[u8], opt: usize, optsz: usize, nsec: usize, rva: u32) -> Option<usize> {
+    let so = opt + optsz;
+    for i in 0..nsec {
+        let o = so + i * 40;
+        if o + 40 > b.len() { break; }
+        let vs = u32(b, o + 8);
+        let va = u32(b, o + 12);
+        let raw = u32(b, o + 20);
+        let rs = u32(b, o + 16);
+        if va <= rva && rva < va + vs.max(rs) {
+            return Some((raw + (rva - va)) as usize);
+        }
+    }
+    None
+}
+
 fn u16(b: &[u8], o: usize) -> u16 { u16::from_le_bytes([b[o], b[o + 1]]) }
 fn u32(b: &[u8], o: usize) -> u32 { u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]]) }
 fn u64(b: &[u8], o: usize) -> u64 {
@@ -17,6 +33,12 @@ pub struct PeInfo {
     pub image_base: u64,
     pub size_of_image: u32,
     pub entry_rva: u32,
+    /// VA of the TLS index (the DWORD the loader must fill with the slot index).
+    pub tls_index_va: u64,
+    /// TLS callback function VAs (DLL_PROCESS_ATTACH is called for each).
+    pub tls_callbacks: Vec<u64>,
+    /// The TLS slot index we assigned (written to tls_index_va).
+    pub tls_index: u32,
 }
 
 /// Parse the headers and copy sections from `exe_path` into `dest` (a buffer
@@ -60,6 +82,35 @@ pub fn load_into(exe_path: &str, dest: *mut u8, dest_len: usize) -> Option<PeInf
             unsafe { std::ptr::copy_nonoverlapping(b.as_ptr().add(raw_off), dest.add(va), n); }
         }
     }
-    glog!("[gow.pe] mapped image: base=0x{image_base:x} size=0x{size_of_image:x} entry=0x{entry_rva:x}");
-    Some(PeInfo { image_base, size_of_image, entry_rva })
+    // TLS directory: grab the index VA and the callback list, and assign a slot.
+    let (mut tls_index_va, mut tls_callbacks) = (0u64, Vec::new());
+    let tls_rva = u32(&b, opt + 112 + 9 * 8);
+    if tls_rva != 0 {
+        if let Some(off) = rva_to_off(&b, opt, optsz, nsec, tls_rva) {
+            tls_index_va = u64(&b, off + 16);
+            let cbs = u64(&b, off + 24);
+            if cbs >= image_base {
+                let cbo = rva_to_off(&b, opt, optsz, nsec, (cbs - image_base) as u32);
+                if let Some(mut p) = cbo {
+                    loop {
+                        let f = u64(&b, p);
+                        if f == 0 { break; }
+                        tls_callbacks.push(f);
+                        p += 8;
+                        if tls_callbacks.len() > 64 { break; }
+                    }
+                }
+            }
+        }
+    }
+    // Assign a TLS slot for this module (0-based, like the Windows loader).
+    let tls_index: u32 = 0;
+    if tls_index_va != 0 {
+        let off = (tls_index_va - image_base) as usize;
+        if off + 4 <= dest_len {
+            unsafe { *((dest.add(off)) as *mut u32) = tls_index; }
+        }
+    }
+    glog!("[gow.pe] mapped image: base=0x{image_base:x} size=0x{size_of_image:x} entry=0x{entry_rva:x} tls_idx=0x{tls_index_va:x} tls_callbacks={}", tls_callbacks.len());
+    Some(PeInfo { image_base, size_of_image, entry_rva, tls_index_va, tls_callbacks, tls_index })
 }

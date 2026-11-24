@@ -447,10 +447,31 @@ fn run_game_library(path: CString, pdir: &str, gdir: &str, image_base: u64, imag
     // base, so absolute addresses in the recompiled code are valid.
     let exe_path = format!("{gdir}/GodOfWar/GoW.exe");
     let exe_path = if std::path::Path::new(&exe_path).exists() { exe_path } else { format!("{gdir}/GoW.exe") };
-    match crate::pe_load::load_into(&exe_path, cpu.image, cpu.image_size as usize) {
+    let pe_info = crate::pe_load::load_into(&exe_path, cpu.image, cpu.image_size as usize);
+    match &pe_info {
         Some(_) => crate::glog!("[gow] PE image loaded from {exe_path}"),
         None => crate::glog!("[gow] WARNING: could not load PE image at {exe_path}"),
     }
+
+    // Run the PE's TLS callbacks (DLL_PROCESS_ATTACH = 1). The CRT's dynamic
+    // allocates its per-thread state here; skipping them leaves the TLS array
+    // empty and later code dereferences null slots.
+    if let Some(info) = &pe_info {
+        for cb in &info.tls_callbacks {
+            let rva = (*cb).wrapping_sub(image_base);
+            if rva < 0xffff_ffff {
+                crate::glog!("[gow.tls] callback rva=0x{rva:x} (DLL_PROCESS_ATTACH)");
+                let c = cpu.as_mut() as *mut crate::dispatch::GowCpu;
+                unsafe {
+                    (*c).gpr.rcx = image_base;   // hinstDLL
+                    (*c).gpr.rdx = 1;            // DLL_PROCESS_ATTACH
+                    (*c).gpr.r8 = 0;             // lpvReserved
+                }
+                unsafe { crate::dispatch::gow_run(c, rva as u32) };
+            }
+        }
+    }
+
     crate::glog!("[gow] entry=0x{entry_rva:x} running");
     unsafe { crate::dispatch::gow_run(cpu.as_mut() as *mut GowCpu, entry_rva) };
     crate::glog!("[gow] returned from entry (unimpl hits reported above)");
