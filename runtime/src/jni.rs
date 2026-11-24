@@ -197,16 +197,26 @@ fn extract_driver_from_zip(zip_path: &std::path::Path, priv_dir: &str) -> Option
         Err(e) => { crate::glog!("[gow.driver] zip parse {} failed: {e}", zip_path.display()); return None; }
     };
     for i in 0..archive.len() {
-        let mut entry = archive.by_index(i).ok()?;
+        let mut entry = match archive.by_index(i) {
+            Ok(e) => e,
+            Err(e) => { crate::glog!("[gow.driver] entry {i} error: {e}"); return None; }
+        };
         let name = entry.name().to_string();
+        crate::glog!("[gow.driver]   zip entry: {name}");
         if name.ends_with(".so") {
             let out = format!("{priv_dir}/{}", name.rsplit('/').next().unwrap_or("libvulkan.so"));
-            let mut of = std::fs::File::create(&out).ok()?;
-            std::io::copy(&mut entry, &mut of).ok()?;
+            let mut of = match std::fs::File::create(&out) {
+                Ok(f) => f,
+                Err(e) => { crate::glog!("[gow.driver] create {out} failed: {e}"); return None; }
+            };
+            if let Err(e) = std::io::copy(&mut entry, &mut of) {
+                crate::glog!("[gow.driver] copy {name} failed: {e}"); return None;
+            }
             crate::glog!("[gow.driver] extracted {name} -> {out}");
             return Some(out);
         }
     }
+    crate::glog!("[gow.driver] {} has no .so entry ({} entries)", zip_path.display(), archive.len());
     None
 }
 
