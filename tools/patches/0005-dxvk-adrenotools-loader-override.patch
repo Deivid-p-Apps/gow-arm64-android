@@ -1,0 +1,59 @@
+diff --git a/src/d3d11/d3d11.sym b/src/d3d11/d3d11.sym
+index a137c20..9b1b4fe 100644
+--- a/src/d3d11/d3d11.sym
++++ b/src/d3d11/d3d11.sym
+@@ -6,6 +6,8 @@
+     D3D11On12CreateDevice;
+     dxvk_android_set_window;
+ 
++    dxvk_vulkan_set_get_instance_proc_addr;
++
+   local:
+     *;
+ };
+diff --git a/src/dxgi/dxgi.sym b/src/dxgi/dxgi.sym
+index 0f2fa5e..fe457ea 100644
+--- a/src/dxgi/dxgi.sym
++++ b/src/dxgi/dxgi.sym
+@@ -7,6 +7,8 @@
+     DXGIGetDebugInterface1;
+     dxvk_android_set_window;
+ 
++    dxvk_vulkan_set_get_instance_proc_addr;
++
+   local:
+     *;
+ };
+diff --git a/src/vulkan/vulkan_loader.cpp b/src/vulkan/vulkan_loader.cpp
+index f9d1e98..262b024 100644
+--- a/src/vulkan/vulkan_loader.cpp
++++ b/src/vulkan/vulkan_loader.cpp
+@@ -7,9 +7,28 @@
+ #include "../util/util_string.h"
+ #include "../util/util_win32_compat.h"
+ 
++/* Android: libadrenotools (https://github.com/bylaws/libadrenotools) hands the
++ * host a private copy of the Vulkan loader whose driver load was redirected to
++ * a user-chosen driver (Turnip). The host passes that loader's
++ * vkGetInstanceProcAddr here; every vk* call DXVK makes goes through it (see
++ * LibraryFn::sym), so pointing this single pointer at the adrenotools loader
++ * moves the whole renderer onto the custom driver. When it is not set, the
++ * stock libvulkan.so is loaded exactly as before. */
++static PFN_vkGetInstanceProcAddr g_instanceProcAddrOverride = nullptr;
++
++extern "C" __attribute__((visibility("default"))) void dxvk_vulkan_set_get_instance_proc_addr(void* pfn) {
++  g_instanceProcAddrOverride = reinterpret_cast<PFN_vkGetInstanceProcAddr>(pfn);
++}
++
+ namespace dxvk::vk {
+ 
+   static std::pair<HMODULE, PFN_vkGetInstanceProcAddr> loadVulkanLibrary() {
++    if (g_instanceProcAddrOverride) {
++      Logger::info(str::format("Vulkan: using host-provided vkGetInstanceProcAddr @ 0x",
++        std::hex, reinterpret_cast<uintptr_t>(g_instanceProcAddrOverride)));
++      return std::make_pair(static_cast<HMODULE>(nullptr), g_instanceProcAddrOverride);
++    }
++
+     static const std::array<const char*, 2> dllNames = {{
+ #ifdef _WIN32
+       "winevulkan.dll",

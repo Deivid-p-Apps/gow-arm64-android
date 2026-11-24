@@ -35,6 +35,7 @@ public class GowActivity extends Activity implements SurfaceHolder.Callback {
     private native int nativeInit(String gameDir);
     private native int nativeLoadDriver(String driversDir, String privDir);
     private native int nativeLoadDriverFile(String driverLibPath, String privDir);
+    private native int nativeSetDriver(String driverDir, String driverName);
     private native int nativeLoadAndRun(String gameDir, String privDir,
                                         long imageBase, long imageSize, int entryRva);
     private native void nativeSurfaceCreated(Surface surface);

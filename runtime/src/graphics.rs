@@ -137,6 +137,52 @@ impl GraphicsBridge {
                 "[gow.gfx] no DXVK Native libraries found in {native_lib_dir} (APK is runtime-only)"
             );
         }
+        // Point DXVK's Vulkan at the libadrenotools loader when a custom driver was
+        // opened. Must happen before the first D3D11/DXGI call, which is where DXVK
+        // lazily loads `libvulkan.so` and constructs its loader.
+        self.set_vulkan_loader();
+        any
+    }
+
+    /// Hand DXVK the `vkGetInstanceProcAddr` of the loader libadrenotools opened
+    /// for the chosen driver, so the whole renderer runs on that driver instead of
+    /// the process-wide system loader.
+    ///
+    /// DXVK resolves every Vulkan entry point through one `vkGetInstanceProcAddr`
+    /// (its `LibraryFn::sym`), and the patch in
+    /// `tools/patches/0005-dxvk-adrenotools-loader-override.patch` adds the setter
+    /// `dxvk_vulkan_set_get_instance_proc_addr`. Both `.so`s carry their own copy
+    /// of that pointer, exactly like `dxvk_android_set_window`, so it is pushed to
+    /// both. No driver ⇒ nothing to do: DXVK loads `libvulkan.so` itself.
+    pub fn set_vulkan_loader(&self) -> bool {
+        let Some(gipa) = crate::adrenotools::instance_proc_addr() else {
+            crate::glog!("[gow.gfx] no custom driver; DXVK uses the system Vulkan loader");
+            return false;
+        };
+        let mut any = false;
+        for dll in ["dxgi.dll", "d3d11.dll"] {
+            let Some(handle) = self.handle(dll) else { continue };
+            let sym = unsafe {
+                dlsym(
+                    handle,
+                    b"dxvk_vulkan_set_get_instance_proc_addr\0".as_ptr()
+                        as *const std::os::raw::c_char,
+                )
+            };
+            if sym.is_null() {
+                crate::glog!(
+                    "[gow.gfx] {dll}: dxvk_vulkan_set_get_instance_proc_addr missing (DXVK built without P7?)"
+                );
+                continue;
+            }
+            type SetGipa = unsafe extern "C" fn(*mut std::ffi::c_void);
+            let f: SetGipa = unsafe { std::mem::transmute(sym) };
+            unsafe { f(gipa as *mut std::ffi::c_void) };
+            crate::glog!(
+                "[gow.gfx] {dll}: vkGetInstanceProcAddr=0x{gipa:x} pushed (adrenotools loader)"
+            );
+            any = true;
+        }
         any
     }
 

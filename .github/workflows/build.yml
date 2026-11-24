@@ -152,6 +152,9 @@ jobs:
           "$READELF" --dyn-syms -W dist/libdxvk_dxgi.so | grep -q 'dxvk_android_set_window'
           "$READELF" --dyn-syms -W dist/libdxvk_d3d11.so | grep -q 'D3D11CreateDevice'
           "$READELF" --dyn-syms -W dist/libdxvk_d3d11.so | grep -q 'dxvk_android_set_window'
+          # P7: the runtime hands DXVK the adrenotools loader through this setter.
+          "$READELF" --dyn-syms -W dist/libdxvk_dxgi.so | grep -q 'dxvk_vulkan_set_get_instance_proc_addr'
+          "$READELF" --dyn-syms -W dist/libdxvk_d3d11.so | grep -q 'dxvk_vulkan_set_get_instance_proc_addr'
           # 16 KB page alignment for Android 15 devices.
           "$READELF" -lW dist/libdxvk_d3d11.so | grep -E 'LOAD' | head -3
           "$STRIP" --strip-debug dist/libdxvk_d3d11.so dist/libdxvk_dxgi.so
@@ -174,6 +177,85 @@ jobs:
                  --notes "libdxvk_d3d11.so + libdxvk_dxgi.so built from doitsujin/dxvk v3.1.1 with the Android WSI patches in tools/patches/."
           gh release upload "$TAG" dist/libdxvk_d3d11.so dist/libdxvk_dxgi.so --clobber \
             -R "${{ github.repository }}"
+          gh release view "$TAG" -R "${{ github.repository }}" --json assets -q '.assets[].name'
+
+  adrenotools:
+    name: Build libadrenotools + hooks for Android arm64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Android SDK/NDK (with CMake)
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'ndk;27.2.12479018 cmake;3.22.1'
+      - name: Host tools (ninja)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build
+          ninja --version
+      - name: Clone libadrenotools at the pinned commit
+        run: |
+          # Pinned (8fae8ce254dfc1344527e05301e43f37dea2df80) for reproducibility;
+          # --recursive pulls lib/linkernsbypass, the linker-namespace bypass the
+          # hook needs.
+          git clone --recursive https://github.com/bylaws/libadrenotools.git adrenotools-src
+          git -C adrenotools-src checkout --detach \
+            8fae8ce254dfc1344527e05301e43f37dea2df80
+          git -C adrenotools-src submodule update --init --recursive
+          # gen/bcenabler_patch.h ships pre-built; only build_asm.sh regenerates it.
+          test -f adrenotools-src/gen/bcenabler_patch.h
+          test -f adrenotools-src/lib/linkernsbypass/CMakeLists.txt
+          git -C adrenotools-src rev-parse HEAD
+      - name: Configure + build (arm64-v8a, API 29, shared)
+        run: |
+          NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
+          # CMake installed by setup-android lives under the SDK, not on PATH.
+          export PATH="$ANDROID_SDK_ROOT/cmake/3.22.1/bin:$PATH"
+          cmake --version
+          cmake -S adrenotools-src -B adrenotools-build -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-29 \
+            -DANDROID_STL=c++_static \
+            -DBUILD_SHARED_LIBS=ON \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build adrenotools-build --parallel "$(nproc)"
+      - name: Collect, verify and strip
+        run: |
+          NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
+          READELF="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+          STRIP="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+          mkdir -p dist
+          cp adrenotools-build/libadrenotools.so dist/
+          cp adrenotools-build/src/hook/libhook_impl.so dist/
+          cp adrenotools-build/src/hook/libmain_hook.so dist/
+          cp adrenotools-build/src/hook/libfile_redirect_hook.so dist/
+          cp adrenotools-build/src/hook/libgsl_alloc_hook.so dist/
+          # c++_static: the libs are self-contained; no libc++_shared.so needed.
+          # The one symbol the Rust runtime resolves.
+          "$READELF" --dyn-syms -W dist/libadrenotools.so | grep -q 'adrenotools_open_libvulkan'
+          # The hook the loader must find; it exports android_dlopen_ext.
+          "$READELF" --dyn-syms -W dist/libmain_hook.so | grep -q 'android_dlopen_ext'
+          for so in dist/libadrenotools.so dist/libmain_hook.so; do
+            echo "== $so"; "$READELF" -d "$so" | grep -E 'SONAME|NEEDED' || true
+          done
+          "$STRIP" --strip-debug dist/*.so
+          ls -la dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: adrenotools-android-arm64
+          path: dist/*.so
+      - name: Publish to a private release
+        if: ${{ vars.ADRENOTOOLS_OUT_TAG != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ vars.ADRENOTOOLS_OUT_TAG }}"
+          gh release view "$TAG" -R "${{ github.repository }}" >/dev/null 2>&1 \
+            || gh release create "$TAG" -R "${{ github.repository }}" \
+                 --title "libadrenotools (Android arm64)" --prerelease \
+                 --notes "libadrenotools.so + hook libs built from bylaws/libadrenotools @ 8fae8ce254dfc1344527e05301e43f37dea2df80 (BSD-2-Clause)."
+          gh release upload "$TAG" dist/*.so --clobber -R "${{ github.repository }}"
           gh release view "$TAG" -R "${{ github.repository }}" --json assets -q '.assets[].name'
 
   game_so:
@@ -240,7 +322,7 @@ jobs:
 
   android:
     name: Build Android runtime APK (arm64-v8a)
-    needs: [game_so, dxvk]
+    needs: [game_so, dxvk, adrenotools]
     # Run even if game_so/dxvk were skipped or failed: then it falls back to
     # whatever .so are already on the releases, or a runtime-only APK.
     if: ${{ always() }}
@@ -300,6 +382,28 @@ jobs:
               -p 'libdxvk_d3d11.so' -p 'libdxvk_dxgi.so' -D "$DEST" --clobber \
               && echo "staged DXVK d3d11+dxgi from release $TAG" \
               || echo "no DXVK .so on release $TAG; APK continues without a D3D11 backend"
+          fi
+          ls -la "$DEST" || true
+      - name: Stage libadrenotools + hook libs (if published)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Built by the `adrenotools` job. These MUST end up in nativeLibraryDir
+          # (lib/arm64-v8a/ in the APK) with useLegacyPackaging = true, because
+          # adrenotools_open_libvulkan loads the hooks by name from hookLibDir.
+          TAG="${{ vars.ADRENOTOOLS_ASSET }}"
+          [ -z "$TAG" ] && TAG="${{ vars.ADRENOTOOLS_OUT_TAG }}"
+          DEST=android/app/src/main/jniLibs/arm64-v8a
+          mkdir -p "$DEST"
+          if [ -z "$TAG" ]; then
+            echo "ADRENOTOOLS_ASSET/ADRENOTOOLS_OUT_TAG not set; APK has no custom-driver support"
+          else
+            gh release download "$TAG" -R "${{ github.repository }}" \
+              -p 'libadrenotools.so' -p 'libmain_hook.so' \
+              -p 'libhook_impl.so' -p 'libfile_redirect_hook.so' -p 'libgsl_alloc_hook.so' \
+              -D "$DEST" --clobber \
+              && echo "staged libadrenotools + hooks from release $TAG" \
+              || echo "no libadrenotools .so on release $TAG; APK continues on the system driver"
           fi
           ls -la "$DEST" || true
       - name: Assemble debug APK

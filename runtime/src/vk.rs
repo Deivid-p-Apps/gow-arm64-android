@@ -1,9 +1,10 @@
-//! Vulkan bootstrap: instance, physical/logical device, and a swapchain bound to
+//! Vulkan bootstrap: instance, physical/logical device, and a surface bound to
 //! the Android ANativeWindow (`vkCreateAndroidSurfaceKHR`). This is shared by
 //! phase 1 (handing an instance to DXVK Native) and phase 2 (the native backend).
 //!
-//! The Vulkan loader resolves to the Turnip driver when libadrenotools has loaded
-//! one, so custom Adreno drivers work the same way here as in emulators.
+//! Every entry point is resolved through `vkGetInstanceProcAddr`: the one from
+//! the libadrenotools loader when a custom driver is active (see
+//! `runtime/src/adrenotools.rs`), otherwise the system `libvulkan.so`.
 
 pub struct VkContext {
     pub instance: u64,
@@ -14,7 +15,7 @@ pub struct VkContext {
     pub surface: u64,
 }
 
-/// Minimal Vulkan entry points, resolved from libvulkan.so.1 at runtime.
+/// Minimal Vulkan entry points, resolved from a loader's `vkGetInstanceProcAddr`.
 struct VkFns {
     create_instance: unsafe extern "system" fn(*const u8, *const u8, *const u8, *mut u64) -> i32,
     enumerate_physical_devices: unsafe extern "system" fn(u64, *mut u32, *mut u64) -> i32,
@@ -26,45 +27,66 @@ struct VkFns {
 
 use std::ffi::c_void;
 
-impl VkFns {
-    unsafe fn load() -> Option<Self> {
-        extern "C" {
-            fn dlopen(p: *const std::os::raw::c_char, f: i32) -> *mut c_void;
-            fn dlsym(h: *mut c_void, s: *const std::os::raw::c_char) -> *mut c_void;
-        }
-        // Android ships the loader as `libvulkan.so` (no `.so.1` suffix, unlike
-        // desktop Linux). Try both.
-        let mut h = std::ptr::null_mut();
-        for name in ["libvulkan.so", "libvulkan.so.1"] {
-            if let Ok(c) = std::ffi::CString::new(name) {
-                h = dlopen(c.as_ptr(), 2);
-                if !h.is_null() {
-                    crate::glog!("[gow.vk] using {name}");
-                    break;
-                }
+/// `vkGetInstanceProcAddr`, either from the system loader or from the
+/// libadrenotools-opened loader (the custom Turnip driver).
+type Gipa = unsafe extern "system" fn(u64, *const u8) -> usize;
+
+/// Locate a `vkGetInstanceProcAddr`: the custom-driver loader when
+/// libadrenotools opened one, else the system `libvulkan.so`.
+///
+/// A custom driver can only be reached through the loader libadrenotools
+/// returned (`adrenotools_open_libvulkan`); that loader must be used for every
+/// Vulkan call, not just for the instance, or the instance would belong to a
+/// different driver than the one chosen. See `runtime/src/adrenotools.rs`.
+unsafe fn get_instance_proc_addr() -> Option<Gipa> {
+    if let Some(gipa) = crate::adrenotools::instance_proc_addr() {
+        crate::glog!("[gow.vk] using the libadrenotools loader's vkGetInstanceProcAddr");
+        return Some(std::mem::transmute(gipa));
+    }
+
+    extern "C" {
+        fn dlopen(p: *const std::os::raw::c_char, f: i32) -> *mut c_void;
+        fn dlsym(h: *mut c_void, s: *const std::os::raw::c_char) -> *mut c_void;
+    }
+    // Android ships the loader as `libvulkan.so` (no `.so.1` suffix, unlike
+    // desktop Linux). Try both.
+    let mut h = std::ptr::null_mut();
+    for name in ["libvulkan.so", "libvulkan.so.1"] {
+        if let Ok(c) = std::ffi::CString::new(name) {
+            h = dlopen(c.as_ptr(), 2);
+            if !h.is_null() {
+                crate::glog!("[gow.vk] using {name}");
+                break;
             }
         }
-        if h.is_null() { return None; }
-        let mut sym = |name: &str| -> usize {
-            let c = std::ffi::CString::new(name).unwrap();
-            dlsym(h, c.as_ptr()) as usize
-        };
-        Some(VkFns {
-            create_instance: std::mem::transmute(sym("vkCreateInstance")),
-            enumerate_physical_devices: std::mem::transmute(sym("vkEnumeratePhysicalDevices")),
-            create_device: std::mem::transmute(sym("vkCreateDevice")),
-            get_device_queue: std::mem::transmute(sym("vkGetDeviceQueue")),
-            create_android_surface: std::mem::transmute(sym("vkCreateAndroidSurfaceKHR")),
-            destroy_instance: std::mem::transmute(sym("vkDestroyInstance")),
-        })
     }
+    if h.is_null() {
+        return None;
+    }
+    let sym = dlsym(h, b"vkGetInstanceProcAddr\0".as_ptr() as *const std::os::raw::c_char);
+    if sym.is_null() {
+        return None;
+    }
+    Some(std::mem::transmute(sym))
+}
+
+/// Resolve one entry point through a `vkGetInstanceProcAddr`.
+unsafe fn resolve(gipa: Gipa, instance: u64, name: &str) -> usize {
+    let c = std::ffi::CString::new(name).unwrap();
+    gipa(instance, c.as_ptr() as *const u8)
 }
 
 impl VkContext {
     /// Bring up a Vulkan instance/device and a surface for the ANativeWindow.
     pub fn new(anative_window: *mut c_void, app_name: &str) -> Option<Self> {
         unsafe {
-            let f = VkFns::load()?;
+            let gipa = get_instance_proc_addr()?;
+            let create_instance: unsafe extern "system" fn(
+                *const u8,
+                *const u8,
+                *const u8,
+                *mut u64,
+            ) -> i32 = std::mem::transmute(resolve(gipa, 0, "vkCreateInstance"));
 
             // VkApplicationInfo (minimal, sType=0, apiVersion 1.1)
             #[repr(C)] struct AppInfo { s: u32, _p: usize, name: *const u8, _e: u32, _ev: u32, api: u32, _av: u32, _ae: u32 }
@@ -73,11 +95,19 @@ impl VkContext {
             // extensions: VK_KHR_surface + VK_KHR_android_surface
             let ext_names = [b"VK_KHR_surface\0".as_ptr(), b"VK_KHR_android_surface\0".as_ptr()];
             let mut inst: u64 = 0;
-            if (f.create_instance)(&app as *const _ as *const u8, std::ptr::null(), ext_names.as_ptr() as *const u8, &mut inst) != 0 {
+            if create_instance(&app as *const _ as *const u8, std::ptr::null(), ext_names.as_ptr() as *const u8, &mut inst) != 0 {
                 crate::glog!("[gow.vk] vkCreateInstance failed");
                 return None;
             }
 
+            let f = VkFns {
+                create_instance,
+                enumerate_physical_devices: std::mem::transmute(resolve(gipa, inst, "vkEnumeratePhysicalDevices")),
+                create_device: std::mem::transmute(resolve(gipa, inst, "vkCreateDevice")),
+                get_device_queue: std::mem::transmute(resolve(gipa, inst, "vkGetDeviceQueue")),
+                create_android_surface: std::mem::transmute(resolve(gipa, inst, "vkCreateAndroidSurfaceKHR")),
+                destroy_instance: std::mem::transmute(resolve(gipa, inst, "vkDestroyInstance")),
+            };
             let mut count: u32 = 0;
             (f.enumerate_physical_devices)(inst, &mut count, std::ptr::null_mut());
             if count == 0 {

@@ -119,15 +119,14 @@ pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeClearTouchLayout(
 }
 
 /// Load the Turnip (or other) Vulkan driver from an adrenotools package in the
-/// game's drivers directory into the app's private storage, then make it the
-/// Vulkan driver the process uses. Returns 0 on success.
+/// game's drivers directory, then make it the Vulkan driver the process uses.
+/// Returns 0 on success.
 ///
-/// An adrenotools package is a zip with `meta.json` + a driver `.so`
-/// (commonly `libvulkan_freedreno.so`). Android cannot dlopen from external
-/// storage, so the driver is copied into `priv_dir` first. The Vulkan loader
-/// picks it up via the driver search path set here.
-/// Load a driver the user picked directly (absolute path to a `.so` on shared
-/// storage). It is copied into `priv_dir` (required before dlopen) and loaded.
+/// The driver is opened **through libadrenotools** (`crate::adrenotools`), not by
+/// dlopen-ing it into this process: only adrenotools can make the Android loader
+/// use a custom ICD. An adrenotools package is a zip with `meta.json` + a driver
+/// `.so` (commonly `libvulkan_freedreno.so`). The driver must be in app-private
+/// storage, so it is copied there first.
 #[no_mangle]
 pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeLoadDriverFile(
     env: *mut std::ffi::c_void,
@@ -143,6 +142,25 @@ pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeLoadDriverFile(
     }
     crate::glog!("[gow.driver] loading chosen driver: {lib}");
     stage_and_load_driver(&lib, &pdir)
+}
+
+/// Open a driver that is **already** in app-private storage, given its directory
+/// and library name. Equivalent to the env vars `GOW_DRIVER_DIR`/`GOW_DRIVER_NAME`
+/// (which `adrenotools::open` also sets). Returns 0 on success.
+#[no_mangle]
+pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeSetDriver(
+    env: *mut std::ffi::c_void,
+    _thiz: *mut std::ffi::c_void,
+    driver_dir: *mut std::ffi::c_void,
+    driver_name: *mut std::ffi::c_void,
+) -> c_int {
+    let dir = unsafe { jstring_to_string(env, driver_dir) };
+    let name = unsafe { jstring_to_string(env, driver_name) };
+    if dir.is_empty() || name.is_empty() {
+        crate::glog!("[gow.driver] nativeSetDriver: empty dir/name; using system Vulkan");
+        return -1;
+    }
+    if crate::adrenotools::open(&dir, &name) { 0 } else { -1 }
 }
 
 #[no_mangle]
@@ -194,10 +212,11 @@ fn stage_and_load_driver(src: &str, priv_dir: &str) -> c_int {
     let base = std::path::Path::new(src)
         .file_name()
         .and_then(|s| s.to_str())
-        .unwrap_or("libvulkan_freedreno.so");
+        .unwrap_or("libvulkan_freedreno.so")
+        .to_string();
     let dst = format!("{priv_dir}/{base}");
     // Don't copy a file onto itself (fs::copy truncates the destination first,
-    // which would leave a 0-byte file and make dlopen fail).
+    // which would leave a 0-byte file and make the open fail).
     let dst_path = std::path::Path::new(&dst);
     let src_path = std::path::Path::new(src);
     let same = src_path == dst_path;
@@ -207,7 +226,7 @@ fn stage_and_load_driver(src: &str, priv_dir: &str) -> c_int {
             return -1;
         }
     }
-    // Verify the file is non-empty before dlopen (a 0-byte .so is unusable).
+    // Verify the file is non-empty before handing it to adrenotools.
     match std::fs::metadata(&dst) {
         Ok(m) if m.len() == 0 => {
             crate::glog!("[gow.driver] {dst} is 0 bytes; aborting");
@@ -216,18 +235,19 @@ fn stage_and_load_driver(src: &str, priv_dir: &str) -> c_int {
         Err(e) => { crate::glog!("[gow.driver] stat {dst} failed: {e}"); return -1; }
         _ => {}
     }
-    let cpath = CString::new(dst.clone()).unwrap();
-    let h = unsafe { dlopen(cpath.as_ptr(), RTLD_NOW | RTLD_LOCAL) };
-    if h.is_null() {
-        let err = unsafe { dlerror() };
-        let msg = if err.is_null() { "unknown".to_string() } else {
-            unsafe { std::ffi::CStr::from_ptr(err).to_string_lossy().into_owned() }
-        };
-        crate::glog!("[gow.driver] dlopen {dst} failed: {msg}");
-        return -2;
+
+    // The only supported path: libadrenotools opens a private copy of the system
+    // libvulkan.so with this driver swapped in. dlopen-ing the driver directly
+    // does not work (Android's loader ignores it; the driver is not an ICD).
+    if crate::adrenotools::open(priv_dir, &base) {
+        crate::glog!("[gow.driver] Turnip driver active via libadrenotools: {dst}");
+        0
+    } else {
+        crate::glog!(
+            "[gow.driver] libadrenotools could not open {dst}; falling back to the system Vulkan driver"
+        );
+        -2
     }
-    crate::glog!("[gow.driver] Turnip driver loaded from {dst}");
-    0
 }
 
 /// Extract the driver `.so` from an adrenotools zip into `priv_dir`.
@@ -291,7 +311,6 @@ fn install_import_resolver(lib_handle: *mut std::ffi::c_void, pdir: &str, gdir: 
 }
 
 const RTLD_NOW: c_int = 2;
-const RTLD_LOCAL: c_int = 0;
 const RTLD_GLOBAL: c_int = 0x100;
 
 extern "C" {
@@ -409,6 +428,10 @@ fn run_game_library(path: CString, pdir: &str, gdir: &str, image_base: u64, imag
     // `call [iat_slot]` reaches real implementations. The import list comes
     // from the manifest the recompiler emitted next to the shards.
     install_import_resolver(handle, &pdir, &gdir);
+
+    // If a driver was pre-selected via GOW_DRIVER_DIR/GOW_DRIVER_NAME, open it
+    // through libadrenotools before DXVK loads (idempotent with nativeLoadDriver*).
+    crate::adrenotools::open_from_env();
 
     // Load the DXVK Native backend from the APK's native library dir and hand it
     // the current ANativeWindow, before the entry point runs.

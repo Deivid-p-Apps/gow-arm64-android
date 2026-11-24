@@ -11,6 +11,7 @@ pub mod input;
 pub mod audio;
 pub mod fileio;
 pub mod graphics;
+pub mod adrenotools;
 pub mod dxbc;
 pub mod threads;
 pub mod vk;

@@ -87,8 +87,8 @@ echo "--- SONAME / NEEDED ---"
 "$TC/llvm-readelf" -d "$DXGI"  | grep -E 'SONAME|NEEDED' || true
 "$TC/llvm-readelf" -d "$D3D11" | grep -E 'SONAME|NEEDED' || true
 echo "--- exports ---"
-"$TC/llvm-readelf" --dyn-syms -W "$DXGI"  | grep -E 'CreateDXGIFactory1|dxvk_android_set_window'
-"$TC/llvm-readelf" --dyn-syms -W "$D3D11" | grep -E 'D3D11CreateDevice|dxvk_android_set_window'
+"$TC/llvm-readelf" --dyn-syms -W "$DXGI"  | grep -E 'CreateDXGIFactory1|dxvk_android_set_window|dxvk_vulkan_set_get_instance_proc_addr'
+"$TC/llvm-readelf" --dyn-syms -W "$D3D11" | grep -E 'D3D11CreateDevice|dxvk_android_set_window|dxvk_vulkan_set_get_instance_proc_addr'
 
 # Strip debug info before packaging; copy to stable unversioned names.
 mkdir -p "$OUT/dist"
