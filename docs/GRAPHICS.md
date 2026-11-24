@@ -30,8 +30,17 @@ the draw calls.
 
 ## Current state
 
-Not yet built in CI (needs the Android NDK + DXVK's Android patches). The runtime
-already resolves the `d3d11.dll`/`dxgi.dll`/`D3DCOMPILER_47.dll` IAT slots and
-will route them to the DXVK exports once the `.so`s are in the APK. Until then
-the game cannot present a frame — and no FPS number is reported (see
+**Phase 1 backend is built and shipped.** The CI `dxvk` job
+(`.github/workflows/build.yml`) cross-compiles DXVK Native v3.1.1 for
+`aarch64-linux-android29` with the Android WSI backend, publishes
+`libdxvk_d3d11.so` + `libdxvk_dxgi.so` to the `dxvk-latest` release, and the
+`android` job stages them into the APK (`lib/arm64-v8a/`). Verified green run:
+`45410666526`. The runtime (`runtime/src/graphics.rs` + `jni.rs`) loads both
+libraries, sets `DXVK_WSI_DRIVER=Android`, and pushes the `ANativeWindow` into
+both. Full verified recipe: `docs/DXVK_ANDROID.md` §10.
+
+What is **not** yet proven: that the game gets a frame on screen. `D3DReflect`
+is served by our own Rust DXBC parser (`runtime/src/dxbc.rs`), and the guest's
+actual usage of it plus the swapchain-format path are untested against the real
+game. Until a frame is confirmed, no FPS number is reported (see
 `PERFORMANCE.md`).

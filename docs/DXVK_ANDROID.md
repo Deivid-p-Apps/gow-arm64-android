@@ -11,6 +11,14 @@ Phase 1 of `docs/GRAPHICS.md`: build `libdxvk_d3d11.so` + `libdxvk_dxgi.so`
 > led there; where a claim was corrected by the real build it is marked
 > **[built]**. The exact patches are `tools/patches/*.patch` (git-applyable), not
 > prose.
+>
+> Verified green run: **45410666526** (`main`, all four jobs success). The `dxvk`
+> job built `libdxvk_d3d11.so` (8.2 MB) + `libdxvk_dxgi.so` (5.3 MB), published
+> them to release `dxvk-latest`, and the `android` job staged them into
+> `android/app/src/main/jniLibs/arm64-v8a/`. The resulting `app-debug.apk`
+> contains `lib/arm64-v8a/{libdxvk_d3d11.so,libdxvk_dxgi.so}` with
+> `D3D11CreateDevice` / `CreateDXGIFactory1` / `dxvk_android_set_window` all
+> exported, machine `aarch64`, SONAMEs unversioned.
 
 ## 10. The verified recipe (what actually builds)
 
