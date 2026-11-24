@@ -84,10 +84,9 @@ jobs:
           TC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
           CC="$TC/aarch64-linux-android29-clang"
           mkdir -p obj
-          for f in generated/gow_shard_*.c generated/gow_table.c; do
-            "$CC" -O1 -fPIC -fno-strict-aliasing -I runtime/include -I generated -c "$f" -o "obj/$(basename ${f%.c}).o" &
-          done
-          wait
+          # Compile shards in parallel using the runner's cores (16+ on GitHub).
+          ls generated/gow_shard_*.c generated/gow_table.c | xargs -P "$(nproc)" -I{} \
+            "$CC" -O1 -fPIC -fno-strict-aliasing -I runtime/include -I generated -c {} -o "obj/$(basename {} .c).o"
           "$CC" -shared -fPIC -Wl,-soname,libgow_game.so -o libgow_game.so obj/*.o \
             -L target/aarch64-linux-android/release -lgow_runtime
           ls -la libgow_game.so
