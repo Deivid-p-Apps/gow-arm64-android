@@ -66,9 +66,9 @@ public final class GamepadLayout {
     // ------------------------------------------------------------------
     private static final float STICK_R = 0.150f;      // visual base radius
     private static final float STICK_KNOB_R = 0.062f; // thumb cap radius
-    private static final float STICK_HIT = 1.16f;     // hit radius = visual * this
+    private static final float STICK_HIT = 1.12f;     // hit radius = visual * this
     private static final float BUTTON_R = 0.050f;
-    private static final float BUTTON_HIT = 1.55f;
+    private static final float BUTTON_HIT = 1.40f;
     private static final float BUTTON_SPREAD = 0.090f; // diamond half-diagonal
     private static final float DPAD_R = 0.108f;        // arm reach from centre
     private static final float DPAD_HIT = 1.22f;
@@ -221,7 +221,7 @@ public final class GamepadLayout {
         by[RIGHT_STICK] = rightStick;
 
         // ---- upper row for the D-pad (left) and face diamond (right) ----
-        float upperY = b - 2f * stickR - 0.140f * u * s;
+        float upperY = b - 2f * stickR - 0.180f * u * s;
         // keep clear of the shoulder row on very short screens
         upperY = Math.max(upperY, t + pillHH * 2f + gap + dpadR + gap);
         float dpadX = l + dpadR;

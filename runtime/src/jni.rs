@@ -99,6 +99,25 @@ pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeTouch(
     crate::input::global().on_touch(pointer_id, x, y, down);
 }
 
+/// Clear the Rust-side touch layout.
+///
+/// The Java overlay (`GamepadOverlayView`) now owns touch geometry: it hit-tests
+/// its own drawn controls, drives the XInput model directly through
+/// `nativeMotion`/`nativeKey`, and forwards every other pointer to
+/// `nativeTouch`. Clearing the built-in fallback layout stops
+/// [`crate::input::InputState::on_touch`] from re-interpreting those forwarded
+/// pass-through points against a *different* geometry (which would double-drive
+/// the sticks/buttons). With the layout empty, forwarded touches are logged as
+/// outside the overlay and ignored, exactly per the honesty rules (D005/D012).
+#[no_mangle]
+pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeClearTouchLayout(
+    _env: *mut std::ffi::c_void,
+    _thiz: *mut std::ffi::c_void,
+) {
+    crate::input::global().set_touch_layout(crate::input::TouchLayout { regions: Vec::new() });
+    crate::glog!("[gow.input] touch layout cleared (Java overlay owns geometry)");
+}
+
 /// Load the Turnip (or other) Vulkan driver from an adrenotools package in the
 /// game's drivers directory into the app's private storage, then make it the
 /// Vulkan driver the process uses. Returns 0 on success.

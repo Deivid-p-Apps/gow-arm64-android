@@ -220,7 +220,6 @@ public class GamepadOverlayView extends View {
             e.putFloat("off_" + i + "_x", offsets[i * 2]);
             e.putFloat("off_" + i + "_y", offsets[i * 2 + 1]);
         }
-        e.putBoolean("initialised", true);
         e.apply();
     }
 
@@ -268,16 +267,19 @@ public class GamepadOverlayView extends View {
         homeLayout = GamepadLayout.compute(w, h, inL, inT, inR, inB, scale, compact, null);
 
         float u = layout.unit;
-        gearR = 0.030f * u * scale;
+        // Gear sits at the top centre; the edit panel is a row of pills BELOW
+        // it, so the two never overlap (otherwise the panel's centre button and
+        // the gear would fight for the same touch).
+        gearR = 0.028f * u * scale;
         gearX = w * 0.5f;
-        gearY = inT + 0.055f * u * scale + gearR;
+        gearY = inT + 0.024f * u * scale + gearR;
 
-        float ph = 0.070f * u * scale;
+        float ph = 0.066f * u * scale;
         float gap = 0.012f * u;
         float pw = Math.min(0.130f * u, (w - 2f * inL - (PANEL_LABELS - 1) * gap) / PANEL_LABELS);
         float total = PANEL_LABELS * pw + (PANEL_LABELS - 1) * gap;
         float x0 = (w - total) * 0.5f;
-        float py = inT + 0.045f * u * scale;
+        float py = gearY + gearR + 0.026f * u * scale;
         for (int i = 0; i < PANEL_LABELS; i++) {
             float lx = x0 + i * (pw + gap);
             panelRects[i] = new RectF(lx, py, lx + pw, py + ph);
@@ -538,10 +540,17 @@ public class GamepadOverlayView extends View {
 
     private void buzz() {
         if (!hapticsEnabled || vibrator == null || !vibrator.hasVibrator()) return;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            vibrator.vibrate(VibrationEffect.createOneShot(12, VibrationEffect.DEFAULT_AMPLITUDE));
-        } else {
-            vibrator.vibrate(12);
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                vibrator.vibrate(VibrationEffect.createOneShot(12, VibrationEffect.DEFAULT_AMPLITUDE));
+            } else {
+                vibrator.vibrate(12);
+            }
+        } catch (SecurityException e) {
+            // No android.permission.VIBRATE in the manifest: stay silent rather
+            // than crash. Add the permission to enable haptics (see GAMEPAD.md).
+            hapticsEnabled = false;
+            Log.w(TAG, "haptics disabled: " + e.getMessage());
         }
     }
 
@@ -619,7 +628,7 @@ public class GamepadOverlayView extends View {
             case MotionEvent.ACTION_POINTER_UP: {
                 int idx = e.getActionIndex();
                 if (e.getPointerId(idx) != editDragPointer) return true;
-                if (editDragTarget <= -100) applyPanel(editDragTarget + 100);
+                if (editDragTarget <= -100) applyPanel(-editDragTarget - 100);
                 editDragPointer = -1;
                 editDragTarget = -1;
                 invalidate();

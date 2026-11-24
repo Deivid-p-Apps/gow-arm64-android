@@ -3,18 +3,13 @@ package com.gow.arm64;
 import android.app.Activity;
 import android.os.Bundle;
 import android.view.InputDevice;
-import android.view.MotionEvent;
 import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
-import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.util.Log;
-import android.os.Environment;
-import android.Manifest;
-import android.content.pm.PackageManager;
 import java.io.File;
 
 /**
@@ -24,10 +19,11 @@ import java.io.File;
  * /storage/emulated/0/god/; the recompiled game library is loaded from the
  * app's private files directory.
  *
- * <p>Touch routing: the overlay is a non-focusable transparent view placed over
- * the SurfaceView inside a {@link FrameLayout}. It only consumes touches that
- * land on a control; any other touch falls through to the activity's own
- * {@link #onTouchEvent}, which forwards it to the native touch layer.
+ * <p>Touch routing: the overlay is a non-focusable transparent view over the
+ * SurfaceView inside a {@link FrameLayout}. The overlay claims the gesture so
+ * multi-touch is order-independent, drives the gamepad model for touches that
+ * land on a control, and forwards every other pointer to the game unchanged
+ * (normalized {@code [0,1]}) so nothing is dropped.
  */
 public class GowActivity extends Activity implements SurfaceHolder.Callback {
     private static final String TAG = "GoW";
@@ -43,6 +39,7 @@ public class GowActivity extends Activity implements SurfaceHolder.Callback {
     private native void nativeKey(int source, int keycode, boolean down);
     private native void nativeMotion(int axis, float value);
     private native void nativeTouch(int pointerId, float x, float y, boolean down);
+    private native void nativeClearTouchLayout();
 
     private SurfaceView surfaceView;
     private GamepadOverlayView gamepad;
@@ -54,6 +51,15 @@ public class GowActivity extends Activity implements SurfaceHolder.Callback {
 
         surfaceView = new SurfaceView(this);
         surfaceView.getHolder().addCallback(this);
+
+        // The Java overlay owns touch geometry; stop the Rust fallback layout
+        // from re-interpreting pass-through touches against a different layout.
+        // Guarded so a runtime .so built before this entry point still starts.
+        try {
+            nativeClearTouchLayout();
+        } catch (UnsatisfiedLinkError e) {
+            Log.w(TAG, "nativeClearTouchLayout missing (stale runtime .so): " + e.getMessage());
+        }
 
         // The overlay drives runtime/src/input.rs through the existing
         // nativeMotion / nativeKey entry points (gamepad axes + gamepad
