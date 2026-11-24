@@ -1415,6 +1415,27 @@ pub unsafe extern "C" fn gow_cmps(cpu: *mut GowCpu, size: u32) {
     c.gpr.rdi = c.gpr.rdi.wrapping_add(step);
 }
 
+/// Background sampler: every 2 s, log the guest RVA the game is at, so a hang
+/// (e.g. stuck before D3D11CreateDevice) is visible without a debugger.
+fn start_sampler(cpu: *mut GowCpu) {
+    static STARTED: std::sync::Once = std::sync::Once::new();
+    STARTED.call_once(|| {
+        let addr = cpu as usize;
+        std::thread::spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            let cpu = addr as *mut GowCpu;
+            let c = unsafe { &*cpu };
+            if c.rip != 0 {
+                crate::glog!(
+                    "[gow.sample] rva=0x{:x} rsp=0x{:x} rbp=0x{:x} calls_missed={} unimpl={}",
+                    c.rip.wrapping_sub(c.image_base), c.gpr.rsp, c.gpr.rbp,
+                    c.missing_indirect_calls, c.unimpl_hits
+                );
+            }
+        });
+    });
+}
+
 /// Central dispatch loop. Runs until next_rva == STOP_RVA.
 #[no_mangle]
 pub unsafe extern "C" fn gow_run(cpu: *mut GowCpu, entry_rva: u32) {
@@ -1422,6 +1443,7 @@ pub unsafe extern "C" fn gow_run(cpu: *mut GowCpu, entry_rva: u32) {
     // re-raising SIG_DFL kills the process mid-run. Diagnostics come from the
     // gow.badstore/badload validators instead.
     crate::crashlog::set_current_cpu(cpu);
+    start_sampler(cpu);
     let c = &mut *cpu;
     let map: HashMap<u32, GowFunc> = registry().iter().cloned().collect();
     c.func_map = map;
