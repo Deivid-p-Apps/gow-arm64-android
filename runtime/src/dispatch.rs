@@ -132,7 +132,10 @@ impl GowCpu {
         // allocation if the fixed mapping is unavailable.
         let (image, image_buf, fixed) = map_at(image_base, image_size);
         let mut stack = vec![0u8; 16 * 1024 * 1024];
-        let rsp = unsafe { stack.as_mut_ptr().add(stack.len()) as u64 }; // grows down
+        // Leave headroom above the initial RSP: at a real process entry, [rsp]
+        // holds a return address and callers' frames live at higher addresses.
+        // Starting exactly at the buffer end makes writes like [rsp+8] fault.
+        let rsp = unsafe { stack.as_mut_ptr().add(stack.len() - 0x8000) as u64 };
         if !fixed {
             crate::glog!("[gow] WARNING: could not map image at 0x{image_base:x}; absolute addresses may fault");
         }
