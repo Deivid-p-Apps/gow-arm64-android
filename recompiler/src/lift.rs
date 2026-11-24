@@ -277,7 +277,7 @@ pub fn lift(pe: &PeImage, out_dir: &std::path::Path) -> Result<LiftOutput> {
     // Build IAT slot map: VA of each IAT slot -> import index.
     let mut iat: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
     for (i, imp) in pe.imports.iter().enumerate() {
-        iat.insert(imp.iat_rva, i as u32);
+        iat.insert(imp.iat_rva, imp.iat_rva);
     }
 
     // Split functions into fixed-size shards so each translation unit stays
@@ -1064,6 +1064,7 @@ fn mem_target_va(insn: &Instruction, _image_base: u64) -> Option<u64> {
 
 /// Look up which import index a memory target VA refers to, via the IAT map.
 fn iat_slot(iat: &std::collections::HashMap<u32, u32>, va: u64, image_base: u64) -> Option<u32> {
+    // Returns the IAT slot RVA (the key the runtime's import resolver uses).
     if va < image_base { return None; }
     let rva = (va - image_base) as u32;
     iat.get(&rva).copied()
