@@ -52,7 +52,14 @@ Motorola Edge 30 Fusion (`tundra`), SM8350 (Snapdragon 888+), Adreno 725 (Turnip
 ### O que falta
 - [ ] Completar ~95 mnemônicos restantes (x87, SSE antigos raros, port I/O, syscall)
 - [ ] Comportamento Win32 além do núcleo (threads reais, sincronização, timers mapeados)
-- [ ] D3D11 -> Vulkan (DXVK Native fase 1; backend nativo em Rust fase 2)
+- [x] D3D11 -> Vulkan **fase 1**: DXVK Native v3.1.1 para Android aarch64 compila no
+  CI (job `dxvk`), vai para o release `dxvk-latest` e entra no APK em
+  `lib/arm64-v8a/libdxvk_{d3d11,dxgi}.so`; o runtime carrega ambos, seta
+  `DXVK_WSI_DRIVER=Android` e empurra o `ANativeWindow` para os dois. Receita
+  verificada em `docs/DXVK_ANDROID.md` §10 (run verde 45410666526).
+- [ ] Backend nativo em Rust (fase 2) e confirmar o primeiro frame em tela
+  (`D3DReflect` via `runtime/src/dxbc.rs` e o caminho de formato da swapchain
+  ainda não testados contra o jogo real)
 - [ ] Áudio (XAudio2 -> AAudio/Oboe), entrada (XInput -> Android), swapchain (ANativeWindow)
 - [ ] Linkar todos os 35 shards num `.so` e carregar o jogo real no dispositivo
 - [ ] Medição de FPS real nos 4 cenários
