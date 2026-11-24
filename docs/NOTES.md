@@ -62,3 +62,11 @@ retorno caem no meio de funções. Solução adotada: **chamadas C diretas**
 (`f_<rva>(cpu)`) para alvos que são entradas conhecidas; `goto L_<rva>` para ramos
 dentro da mesma função; `gow_trampoline`/`gow_call_ptr` para alvos computados
 (contados quando desconhecidos). Provado ponta-a-ponta.
+
+## Imports: modelo de chamada inline (importante)
+O recompilador traduz `call qword [IAT]` para uma chamada **inline**
+`gow_import_call(cpu, iat_rva)` — sem `push` de endereço de retorno. Portanto:
+- `gow_import_call` NÃO deve fazer pop nem alterar `next_rva` (corrigido).
+- A leitura de argumentos na pilha (`arg(n)` em win32.rs) precisa considerar que
+  o endereço de retorno não está empilhado: o 5º argumento fica em `[rsp+0x20]`
+  (não `[rsp+0x28]`). Verificar/ajustar os usos de `arg()` na próxima rodada.
