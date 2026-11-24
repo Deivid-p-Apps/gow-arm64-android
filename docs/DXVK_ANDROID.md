@@ -1,18 +1,152 @@
-# DXVK Native for Android (aarch64) — build plan
+# DXVK Native for Android (aarch64) — build recipe (VERIFIED)
 
 Phase 1 of `docs/GRAPHICS.md`: build `libdxvk_d3d11.so` + `libdxvk_dxgi.so`
 (D3D11/DXGI → Vulkan) for `aarch64-linux-android`, ship them in the APK, and let
 `runtime/src/graphics.rs` (`GraphicsBridge`) route the guest's `D3D11CreateDevice`
 / `CreateDXGIFactory1` IAT slots to them.
 
-This document is a **plan and patch inventory**, not a record of a build we ran.
-Every DXVK fact below is marked:
+> **Status: VERIFIED.** The recipe in §10 is the one that actually ran green in
+> CI (job `dxvk` in `.github/workflows/build.yml`) and produced both `.so`s with
+> the expected exports. Everything below §10 is the original research notes that
+> led there; where a claim was corrected by the real build it is marked
+> **[built]**. The exact patches are `tools/patches/*.patch` (git-applyable), not
+> prose.
 
-- **[V]** = verified by fetching the real source/URL (link in §9).
-- **[I]** = inference from the verified code, checked against our runtime.
+## 10. The verified recipe (what actually builds)
 
-Nothing here requires editing an existing repo file. The companion patch list is
-`tools/dxvk_android_patches.md` (new files + the exact snippets).
+This is the authoritative, working procedure. The CI job `dxvk` implements it
+verbatim.
+
+**Inputs**
+
+| thing | value |
+|---|---|
+| DXVK source | `https://github.com/doitsujin/dxvk`, tag **`v3.1.1`** (`--recursive`) |
+| target | `aarch64-linux-android29-clang` (NDK **r27 / 27.2.12479018**) |
+| host | `ubuntu-latest`, `meson` (≥1.0), `ninja-build`, `glslang-tools`, `python3` |
+| patches | `tools/patches/000{1,2,3,4}-*.patch` (P1–P6, see §11) |
+| output | `libdxvk_d3d11.so`, `libdxvk_dxgi.so` (unversioned SONAME) |
+
+**Steps** (exactly what the workflow does):
+
+```bash
+# 1. host tools
+sudo apt-get install -y ninja-build glslang-tools meson
+[ "$(meson --version | cut -d. -f1)" -lt 1 ] && pip3 install --break-system-packages --upgrade meson
+
+# 2. source (submodules include dxbc-spirv, libdisplay-info, Vulkan/SPIRV headers)
+git clone --recursive --depth 1 --branch v3.1.1 https://github.com/doitsujin/dxvk.git dxvk-src
+
+# 3. patches
+cd dxvk-src && for p in ../tools/patches/*.patch; do git apply "$p"; done
+
+# 4. cross file (written by CI into android-arm64.ini), see §10.1
+
+# 5. configure — NOTE: there is no -Dnative=true; native mode follows from
+#    system != 'windows'. The Android WSI patch removes the SDL3/GLFW requirement.
+meson setup build dxvk-src --cross-file android-arm64.ini --buildtype release \
+  -Dnative_sdl2=disabled -Dnative_sdl3=disabled -Dnative_glfw=disabled \
+  -Denable_d3d8=false -Denable_d3d9=false -Denable_d3d10=false \
+  -Denable_d3d11=true -Denable_dxgi=true
+
+# 6. build only the two libs
+ninja -C build src/d3d11/libdxvk_d3d11.so src/dxgi/libdxvk_dxgi.so
+
+# 7. verify + strip
+llvm-readelf --dyn-syms -W build/src/dxgi/libdxvk_dxgi.so   | grep -E 'CreateDXGIFactory1|dxvk_android_set_window'
+llvm-readelf --dyn-syms -W build/src/d3d11/libdxvk_d3d11.so | grep -E 'D3D11CreateDevice|dxvk_android_set_window'
+llvm-strip --strip-debug build/src/d3d11/libdxvk_d3d11.so build/src/dxgi/libdxvk_dxgi.so
+```
+
+The artifacts are published to the release named by the repo variable
+**`DXVK_OUT_TAG`** (`dxvk-latest`) and consumed by the `android` job, which
+downloads them into `android/app/src/main/jniLibs/arm64-v8a/` so they land in
+`lib/arm64-v8a/` in the APK.
+
+### 10.1 Meson cross file (`android-arm64.ini`)
+
+```ini
+[binaries]
+c          = '$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang'
+cpp        = '$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang++'
+ar         = '$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar'
+strip      = '$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip'
+pkg-config = 'pkg-config'
+
+[properties]
+needs_exe_wrapper = false
+
+[host_machine]
+system     = 'android'      # keys P1/P3; also selects the Android WSI
+kernel     = 'linux'
+cpu_family = 'aarch64'
+cpu        = 'aarch64'
+endian     = 'little'
+
+[built-in options]
+c_args        = ['-fPIC']
+cpp_args      = ['-fPIC']
+c_link_args   = ['-Wl,-z,max-page-size=16384']
+cpp_link_args = ['-Wl,-z,max-page-size=16384']
+```
+
+### 10.2 What the first real build confirmed / corrected
+
+- **[built]** `-Dnative=true` does not exist and is not needed: `-Dnative_sdl2
+  /sdl3/glfw=disabled` are the real options and native mode is chosen by
+  `platform != 'windows'` automatically. The old `tools/build_dxvk_android.sh`
+  has been updated to drop `-Dnative=true`/`-Denable_glslang`.
+- **[built]** With `system='android'` the P3 patch replaces the
+  *"SDL3, SDL2, or GLFW are required"* `error()` with `-DDXVK_WSI_ANDROID`, so
+  **no SDL3/GLFW is linked at all**.
+- **[built]** P1 (gate `-msse*` behind x86) is included even though
+  `get_supported_arguments()` would filter `-mfpmath=sse` anyway; it makes the
+  build independent of meson's probe behaviour.
+- **[built]** P5b is required: without it meson emits
+  `libdxvk_dxgi.so.0.31.1` with `SONAME libdxvk_dxgi.so.0` and Android packages
+  neither the version suffix nor a loadable `DT_NEEDED`. The patch makes both
+  libs unversioned (`libdxvk_dxgi.so`) with matching `DT_NEEDED`.
+- **[built]** `dxvk_android_set_window` needs the **version-script** edit in
+  `d3d11.sym`/`dxgi.sym` (P5a); the `visibility("default")` attribute alone is
+  not enough because the scripts default to `local: *`.
+- **[built]** The `dxbc-spirv` and `libdisplay-info` submodules are fetched via
+  `--recursive`; there is no `.wrap` fallback, so a non-recursive clone fails at
+  `subproject()`.
+
+### 10.3 Runtime wiring (what the host must do) — implemented
+
+`runtime/src/graphics.rs` + `runtime/src/jni.rs`:
+
+1. `GraphicsBridge` keeps its loaded libraries in **process-global** state so the
+   JNI surface callbacks and the import resolver share one set of `dlopen`
+   handles (the two libs must not be loaded twice).
+2. `autoload()` sets `DXVK_WSI_DRIVER=Android` **before** any D3D call, then
+   `dlopen`s `libdxvk_dxgi.so` first (its SONAME is `d3d11`'s `DT_NEEDED`), then
+   `libdxvk_d3d11.so`, both with `RTLD_NOW | RTLD_GLOBAL`. `autoload` is called
+   from `run_game_library` in `jni.rs`, before the guest entry point runs.
+3. `set_android_window(ANativeWindow*)` `dlsym`s `dxvk_android_set_window` in
+   **both** libraries and calls it — each `.so` has its own `g_androidWindow`
+   (dxgi owns the surface, d3d11 queries the window size), so pushing to only one
+   is a silent no-op for the other. Missing symbol ⇒ loud log, never silent.
+4. `jni.rs::nativeSurfaceCreated` resolves the `ANativeWindow` and pushes it to
+   both libs; `nativeSurfaceChanged` re-pushes; `nativeSurfaceDestroyed` pushes
+   `nullptr` so DXVK reports the display as occluded/minimized instead of
+   presenting to a dead window.
+5. `call_addr`/`call_addr_raw` forward **10** Microsoft-x64 arguments (args 1–4
+   from `rcx,rdx,r8,r9`, args 5–10 from `[rsp+0x28]..[rsp+0x50]`), which is
+   exactly the arity of `D3D11CreateDevice`.
+
+### 10.4 Still open
+
+- **`D3DReflect` / `d3dcompiler_47`.** DXVK does not export it (see §4). It is
+  served by `runtime/src/dxbc.rs` (`win32.rs` intercepts
+  `d3dcompiler_47.dll!D3DReflect` **before** the DXVK route), so it never needs a
+  DXVK symbol. Whether GoW's usage exercises the parsing paths that `dxbc.rs`
+  implements is still unverified against the real game.
+- **Swapchain format.** GoW may create the swapchain from a format obtained via
+  `IDXGIOutput::GetDisplayModeList`; the Android WSI reports one mode (the view
+  size), so this *should* work, but it is unverified for GoW.
+- **Frame pacing / vsync** on the Adreno 725 (`DXVK_FRAME_RATE`) is untuned.
 
 ---
 

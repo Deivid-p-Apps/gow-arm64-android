@@ -1,5 +1,18 @@
 # DXVK Native → Android aarch64: exact patch inventory
 
+> **STATUS: IMPLEMENTED.** The patches below now exist as git-applyable files in
+> `tools/patches/` and are applied by the CI `dxvk` job; see
+> `docs/DXVK_ANDROID.md` §10 for the verified recipe. This file stays as the
+> rationale/confidence record. The file mapping is:
+>
+> - P1 + P3 + P5b → `tools/patches/0001-meson-android-wsi-and-soname.patch`
+> - P4 + P4a/b/c → `tools/patches/0002-wsi-android-backend.patch`
+> - P5a → `tools/patches/0003-export-dxvk-android-set-window.patch`
+> - P2 → `tools/patches/0004-lock-allocation-pool-on-import.patch`
+> - P6 (SDL3 route A) → **not used** (we take Route B / Android WSI)
+> - P7 + P8 + P9 → implemented in `runtime/src/{graphics,jni}.rs` (P9 lives in
+>   `runtime/src/dxbc.rs`, wired from `win32.rs`).
+
 Companion to `docs/DXVK_ANDROID.md`. Each entry is a concrete source change with
 file path, the code, a **confidence** and a **verified source** where one exists.
 
