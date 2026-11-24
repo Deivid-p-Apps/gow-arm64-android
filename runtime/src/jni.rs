@@ -319,9 +319,14 @@ extern "C" {
     fn dlerror() -> *const c_char;
 }
 
+/// Public wrapper so other modules (log) can read jstrings.
+pub unsafe fn jstring_to_string_pub(env: *mut std::ffi::c_void, s: *mut std::ffi::c_void) -> String {
+    jstring_to_string(env, s)
+}
+
 /// JNI `GetStringUTFChars` / `ReleaseStringUTFChars` through the JNIEnv table
 /// (indices 169/170), since native methods receive `jstring`, not `char*`.
-unsafe fn jstring_to_string(env: *mut std::ffi::c_void, s: *mut std::ffi::c_void) -> String {
+pub unsafe fn jstring_to_string(env: *mut std::ffi::c_void, s: *mut std::ffi::c_void) -> String {
     if env.is_null() || s.is_null() {
         return String::new();
     }

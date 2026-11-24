@@ -30,11 +30,14 @@ public class GowActivity extends Activity implements SurfaceHolder.Callback {
 
     /** Absolute path to the chosen driver .so (empty = system driver). */
     public static final String EXTRA_DRIVER_LIB = "driver_lib";
+    /** Whether to mirror [gow] logs to /storage/emulated/0/god/Port/. */
+    public static final String EXTRA_LOG_TO_FILE = "log_to_file";
     static { System.loadLibrary("gow_runtime"); }
 
     private native int nativeInit(String gameDir);
     private native int nativeLoadDriver(String driversDir, String privDir);
     private native int nativeLoadDriverFile(String driverLibPath, String privDir);
+    private native void nativeSetFileLogging(boolean enabled, String dir);
     private native int nativeSetDriver(String driverDir, String driverName);
     private native int nativeLoadAndRun(String gameDir, String privDir,
                                         long imageBase, long imageSize, int entryRva);
@@ -53,6 +56,15 @@ public class GowActivity extends Activity implements SurfaceHolder.Callback {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+
+        // Mirror [gow] logs to /storage/emulated/0/god/Port/ so a crash keeps them.
+        boolean logToFile = getIntent() == null || getIntent().getBooleanExtra(EXTRA_LOG_TO_FILE, true);
+        final String logDir = new File("/storage/emulated/0/god/Port").getAbsolutePath();
+        try {
+            nativeSetFileLogging(logToFile, logDir);
+        } catch (UnsatisfiedLinkError e) {
+            Log.w(TAG, "nativeSetFileLogging missing: " + e.getMessage());
+        }
 
         surfaceView = new SurfaceView(this);
         surfaceView.getHolder().addCallback(this);

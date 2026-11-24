@@ -42,6 +42,7 @@ public class DriverSetupActivity extends Activity {
     private static final String TAG = "GoW.setup";
     private static final String PREFS = "gow";
     private static final String PREF_DRIVER = "selected_driver"; // "" = system
+    private static final String PREF_LOGGING = "file_logging";
     private static final String DRIVER_ROOT = "gpu_drivers";
 
     private SharedPreferences prefs;
@@ -100,6 +101,19 @@ public class DriverSetupActivity extends Activity {
         buttons.addView(startBtn, weightParams());
 
         page.addView(buttons);
+
+        // Log-to-file toggle: writes to /storage/emulated/0/god/Port/ in real
+        // time, so a crash never loses the diagnostics.
+        android.widget.CheckBox logToggle = new android.widget.CheckBox(this);
+        logToggle.setText("Salvar logs em /god/Port/");
+        logToggle.setTextColor(Color.parseColor("#B9CBD3"));
+        logToggle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        logToggle.setChecked(prefs.getBoolean(PREF_LOGGING, true));
+        logToggle.setPadding(0, dp(10), 0, 0);
+        logToggle.setOnCheckedChangeListener((b, checked) ->
+                prefs.edit().putBoolean(PREF_LOGGING, checked).apply());
+        page.addView(logToggle);
+
         setContentView(page);
 
         refresh();
@@ -336,6 +350,7 @@ public class DriverSetupActivity extends Activity {
         }
         android.content.Intent i = new android.content.Intent(this, GowActivity.class);
         i.putExtra(GowActivity.EXTRA_DRIVER_LIB, libPath);
+        i.putExtra(GowActivity.EXTRA_LOG_TO_FILE, prefs.getBoolean(PREF_LOGGING, true));
         startActivity(i);
     }
 }
