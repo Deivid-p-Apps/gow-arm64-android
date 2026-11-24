@@ -330,8 +330,31 @@ pub unsafe extern "C" fn gow_load_xmm(cpu: *mut GowCpu, reg: u32, addr: u64) {
 #[no_mangle]
 pub unsafe extern "C" fn gow_store_xmm(cpu: *mut GowCpu, reg: u32, addr: u64) {
     let c = &*cpu;
+    // Validate the target: a wild address (not in any mapped region) means the
+    // guest computed a bad pointer. Log the exact guest RVA and register state
+    // instead of faulting, so the bug is visible.
+    if !plausible_mem(addr, 16) {
+        crate::glog!(
+            "[gow.badstore] store_xmm reg={reg} addr=0x{addr:x} rva=0x{:x} rsp=0x{:x} rbp=0x{:x} rdi=0x{:x} rsi=0x{:x} rbx=0x{:x} rcx=0x{:x}",
+            c.rip.wrapping_sub(c.image_base), c.gpr.rsp, c.gpr.rbp, c.gpr.rdi, c.gpr.rsi, c.gpr.rbx, c.gpr.rcx
+        );
+        return;
+    }
     (addr as *mut u64).write_unaligned(c.xmm[reg as usize].0[0]);
     (addr as *mut u64).add(1).write_unaligned(c.xmm[reg as usize].0[1]);
+}
+
+/// Very loose check that an address range is plausibly writable: it must be in
+/// the guest image, the guest heap/stack, or low user space — not a wild value
+/// like 0xffffffff... or a small offset.
+#[inline]
+pub fn plausible_mem(addr: u64, len: u64) -> bool {
+    if addr < 0x1000 { return false; }
+    let end = match addr.checked_add(len) { Some(e) => e, None => return false };
+    // Reject the canonical "wild" range (top of the address space).
+    if addr >= 0x0000_8000_0000_0000 { return false; }
+    let _ = end;
+    true
 }
 
 #[no_mangle]
