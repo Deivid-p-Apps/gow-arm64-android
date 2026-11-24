@@ -32,8 +32,18 @@ impl VkFns {
             fn dlopen(p: *const std::os::raw::c_char, f: i32) -> *mut c_void;
             fn dlsym(h: *mut c_void, s: *const std::os::raw::c_char) -> *mut c_void;
         }
-        let path = std::ffi::CString::new("libvulkan.so.1").ok()?;
-        let h = dlopen(path.as_ptr(), 2);
+        // Android ships the loader as `libvulkan.so` (no `.so.1` suffix, unlike
+        // desktop Linux). Try both.
+        let mut h = std::ptr::null_mut();
+        for name in ["libvulkan.so", "libvulkan.so.1"] {
+            if let Ok(c) = std::ffi::CString::new(name) {
+                h = dlopen(c.as_ptr(), 2);
+                if !h.is_null() {
+                    crate::glog!("[gow.vk] using {name}");
+                    break;
+                }
+            }
+        }
         if h.is_null() { return None; }
         let mut sym = |name: &str| -> usize {
             let c = std::ffi::CString::new(name).unwrap();
