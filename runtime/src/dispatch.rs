@@ -48,7 +48,6 @@ impl Default for Xmm { fn default() -> Self { Xmm([0, 0]) } }
 pub struct GowCpu {
     pub gpr: Gprs,
     pub xmm: [Xmm; 17],  // XMM0..15 plus index 16 as a scratch
-    pub fpu: crate::x87::Fpu,
 
     pub rip: u64,
     pub flags: u64,
@@ -73,6 +72,8 @@ pub struct GowCpu {
     pub unimpl_hits: u64,
     /// Win32 import dispatch: IAT RVA -> host handler id.
     pub import_map: HashMap<u32, u32>,
+    /// x87 FPU state (Rust-side; after the C-visible prefix on purpose).
+    pub fpu: crate::x87::Fpu,
 }
 
 unsafe impl Send for GowCpu {}
