@@ -39,6 +39,57 @@ jobs:
             target/release/gowrecomp
             tools/
 
+  game_so:
+    name: Compile recompiled game into libgow_game.so (arm64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Android SDK/NDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'ndk;27.2.12479018'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - name: Build runtime static lib for android
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
+          cargo build -p gow-runtime --release --target aarch64-linux-android
+      - name: Fetch generated shards (private release asset)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p generated
+          TAG="${{ vars.SHARDS_ASSET }}"
+          if [ -z "$TAG" ]; then echo "no SHARDS_ASSET"; exit 1; fi
+          gh release download "$TAG" -R "${{ github.repository }}" \
+            -p 'shards.tar.gz' -O shards.tar.gz
+          tar xzf shards.tar.gz
+      - name: Compile shards and link libgow_game.so
+        run: |
+          NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
+          TC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          CC="$TC/aarch64-linux-android29-clang"
+          mkdir -p obj
+          for f in generated/gow_shard_*.c generated/gow_table.c; do
+            "$CC" -O1 -fPIC -fno-strict-aliasing -I runtime/include -I generated -c "$f" -o "obj/$(basename ${f%.c}).o" &
+          done
+          wait
+          "$CC" -shared -fPIC -Wl,-soname,libgow_game.so -o libgow_game.so obj/*.o \
+            -L target/aarch64-linux-android/release -lgow_runtime
+          ls -la libgow_game.so
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libgow_game-so
+          path: libgow_game.so
+      - name: Publish to a private release
+        if: ${{ vars.SHARDS_OUT_TAG != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ vars.SHARDS_OUT_TAG }}" libgow_game.so --clobber \
+            -R "${{ github.repository }}" || true
+
   android:
     name: Build Android runtime APK (arm64-v8a)
     runs-on: ubuntu-latest

@@ -153,6 +153,8 @@ void     gow_xmm_insertps(GowCpu* cpu, int dst, int src, uint32_t imm);
 void     gow_xmm_addsubps(GowCpu* cpu, int dst, int src);
 void     gow_xmm_palignr(GowCpu* cpu, int dst, int src, uint32_t imm);
 uint64_t gow_rcl_rcr(GowCpu* cpu, uint64_t v, uint64_t count, uint32_t size_bits, uint32_t right);
+uint64_t gow_teb_base(GowCpu* cpu);
+uint64_t gow_fs_base(GowCpu* cpu);
 void     gow_unimpl(GowCpu* cpu, uint32_t rva, uint32_t mnemonic);
 
 /* Drive recompiled code starting at a function entry RVA. */
