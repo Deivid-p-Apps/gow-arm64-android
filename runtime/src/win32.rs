@@ -116,6 +116,53 @@ impl ImportResolver {
             ("kernel32.dll", "EnterCriticalSection") | ("kernel32.dll", "LeaveCriticalSection")
             | ("kernel32.dll", "DeleteCriticalSection") => true,
             ("kernel32.dll", "TlsAlloc") => { c.gpr.rax = tls_alloc(); true }
+            ("kernel32.dll", "TlsGetValue") => {
+                // Read the per-thread TLS slot from the TEB: [gs:0x58][index].
+                let idx = a0;
+                let teb = c.teb;
+                if teb != 0 && idx < 128 {
+                    let tls_ptr = *((teb + 0x58) as *const u64);
+                    let slot = if idx < 64 {
+                        *((teb + 0x148 + idx * 8) as *const u64)
+                    } else if tls_ptr != 0 {
+                        *((tls_ptr + idx * 8) as *const u64)
+                    } else { 0 };
+                    c.gpr.rax = slot;
+                } else {
+                    c.gpr.rax = 0;
+                }
+                true
+            }
+            ("kernel32.dll", "TlsSetValue") => {
+                // Write [gs:0x58][index] (inline slots for the first 64 indices).
+                let idx = a0;
+                let val = a1;
+                let teb = c.teb;
+                if teb != 0 && idx < 128 {
+                    let tls_ptr = *((teb + 0x58) as *const u64);
+                    if idx < 64 {
+                        *((teb + 0x148 + idx * 8) as *mut u64) = val;
+                    } else if tls_ptr != 0 {
+                        *((tls_ptr + idx * 8) as *mut u64) = val;
+                    }
+                }
+                c.gpr.rax = 1;
+                true
+            }
+            ("kernel32.dll", "TlsFree") => { c.gpr.rax = 1; true }
+            ("kernel32.dll", "FlsAlloc") => { c.gpr.rax = tls_alloc(); true }
+            ("kernel32.dll", "FlsGetValue") => {
+                let idx = a0;
+                let teb = c.teb;
+                c.gpr.rax = if teb != 0 && idx < 64 { *((teb + 0x148 + idx * 8) as *const u64) } else { 0 };
+                true
+            }
+            ("kernel32.dll", "FlsSetValue") => {
+                let idx = a0; let val = a1;
+                if c.teb != 0 && idx < 64 { *((c.teb + 0x148 + idx * 8) as *mut u64) = val; }
+                c.gpr.rax = 1; true
+            }
+            ("kernel32.dll", "FlsFree") => { c.gpr.rax = 1; true }
             ("kernel32.dll", "GetLastError") => { c.gpr.rax = 0; true }
             ("kernel32.dll", "GetStartupInfoA") | ("kernel32.dll", "GetStartupInfoW") => {
                 // Fill STARTUPINFO (zeroed is valid); STARTF_USESHOWWINDOW not set.
