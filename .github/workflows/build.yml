@@ -41,6 +41,8 @@ jobs:
 
   game_so:
     name: Compile recompiled game into libgow_game.so (arm64)
+    # Optional: only runs when SHARDS_ASSET points at a release with shards.tar.gz.
+    if: ${{ vars.SHARDS_ASSET != '' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -53,7 +55,11 @@ jobs:
           targets: aarch64-linux-android
       - name: Build runtime static lib for android
         run: |
-          export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
+          NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
+          TC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$TC/aarch64-linux-android29-clang"
+          export CC_aarch64_linux_android="$TC/aarch64-linux-android29-clang"
+          export AR_aarch64_linux_android="$TC/llvm-ar"
           cargo build -p gow-runtime --release --target aarch64-linux-android
       - name: Fetch generated shards (private release asset)
         env:
