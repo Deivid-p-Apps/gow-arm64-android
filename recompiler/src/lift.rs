@@ -386,7 +386,15 @@ pub fn lift(pe: &PeImage, out_dir: &std::path::Path) -> Result<LiftOutput> {
     // Embed the import manifest so the runtime can install the Win32 resolver
     // without a separate file on the device.
     let manifest = build_manifest(pe);
-    writeln!(tbl, "const char gow_manifest_json[] = R\"GOWMANIFEST({manifest})GOWMANIFEST\";")?;
+    // Emit the manifest as a C string literal (raw strings are C++, and the CI
+    // compiles the generated code as C). Escape backslash and quote, and split
+    // across lines to stay within compiler line limits.
+    write!(tbl, "const char gow_manifest_json[] =")?;
+    for line in manifest.split_inclusive('\n') {
+        let escaped = line.replace('\\', "\\\\").replace('"', "\\\"");
+        write!(tbl, "\n  \"{}\"", escaped.trim_end_matches('\n'))?;
+    }
+    writeln!(tbl, ";")?;
     std::fs::write(out_dir.join("gow_table.c"), &tbl)?;
     // Also write it standalone for tooling/inspection.
     let _ = std::fs::write(out_dir.join("manifest.json"), &manifest);
