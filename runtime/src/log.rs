@@ -81,10 +81,35 @@ pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeSetFileLogging(
     enabled: u8,
     dir: *mut std::ffi::c_void,
 ) {
-    // Reuse the JNI string helper from jni.rs.
-    let dir_s = unsafe { crate::jni::jstring_to_string_pub(env, dir) };
+    let dir_s = unsafe { read_jstring(env, dir) };
     let d = if dir_s.is_empty() { "/storage/emulated/0/god/Port".to_string() } else { dir_s };
     set_file_logging(enabled != 0, &d);
+}
+
+/// Read a jstring via the JNIEnv table. Kept here (not in `jni`) so this module
+/// compiles on every target; `jni` is Android-only.
+unsafe fn read_jstring(env: *mut std::ffi::c_void, s: *mut std::ffi::c_void) -> String {
+    if env.is_null() || s.is_null() {
+        return String::new();
+    }
+    let table = *(env as *const *const usize);
+    let get = *table.add(169) as *const ();
+    let release = *table.add(170) as *const ();
+    if get.is_null() || release.is_null() {
+        return String::new();
+    }
+    type GetStr = unsafe extern "system" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, *mut u8) -> *const std::os::raw::c_char;
+    type RelStr = unsafe extern "system" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, *const std::os::raw::c_char);
+    let get: GetStr = std::mem::transmute(get);
+    let release: RelStr = std::mem::transmute(release);
+    let mut is_copy: u8 = 0;
+    let ptr = get(env, s, &mut is_copy);
+    if ptr.is_null() {
+        return String::new();
+    }
+    let owned = std::ffi::CStr::from_ptr(ptr).to_string_lossy().into_owned();
+    release(env, s, ptr);
+    owned
 }
 
 #[macro_export]
