@@ -9,3 +9,11 @@ const GowFuncEntry gow_func_table[] = {
   { 0u, 0 }
 };
 const unsigned gow_func_count = 2;
+const char gow_manifest_json[] = R"GOWMANIFEST({
+  "image_base": 5368709120,
+  "entry_rva": 4096,
+  "size_of_image": 12288,
+  "imports": [
+  ]
+}
+)GOWMANIFEST";

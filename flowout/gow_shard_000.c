@@ -5,7 +5,9 @@ static inline int64_t sign64(uint64_t v) { return (int64_t)v; }
 void f_1000(GowCpu* cpu) {
 L_1000: ;
   /* 0x1000: call 0x0000000140001010h */
+  gow_push64(cpu, 0x1005u);
   f_1010(cpu);
+  gow_pop64(cpu);
 L_1005: ;
   /* 0x1005: mov rax,rcx */
   GOW_REG(cpu, rax) = GOW_REG(cpu, rcx);

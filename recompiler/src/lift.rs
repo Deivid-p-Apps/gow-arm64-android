@@ -303,6 +303,9 @@ pub fn lift(pe: &PeImage, out_dir: &std::path::Path) -> Result<LiftOutput> {
     };
 
     let mut shard_protos = String::new();
+    for &rva in &entries_vec {
+        writeln!(shard_protos, "void f_{rva:x}(GowCpu* cpu);")?;
+    }
     // Shard by emitted BYTE size so no translation unit is huge (keeps compile
     // memory bounded and parallelizable). Functions are emitted in order.
     const SHARD_MAX_BYTES: usize = 4 * 1024 * 1024;
