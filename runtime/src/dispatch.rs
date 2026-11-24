@@ -547,11 +547,15 @@ pub unsafe extern "C" fn gow_call_indirect(cpu: *mut GowCpu, target_va: u64) {
     }
     let c = &mut *cpu;
     if target_va >= c.image_base && target_va < c.image_base + c.image_size {
-        c.next_rva = (target_va - c.image_base) as u32;
+        let rva = (target_va - c.image_base) as u32;
+        // If the target has no lifted function, it will be a dead end at runtime.
+        c.next_rva = rva;
     } else {
-        // Could be an import thunk (IAT slot pointing to a host stub) — handled by
-        // gow_import_call from the lifted code; here record as unresolved.
         c.missing_indirect_calls += 1;
+        if c.missing_indirect_calls <= 64 {
+            crate::glog!("[gow.MISSCALL] indirect target_va=0x{target_va:x} (rva would be 0x{:x})",
+                target_va.wrapping_sub(c.image_base));
+        }
         c.next_rva = STOP_RVA;
     }
 }
@@ -572,8 +576,10 @@ pub unsafe extern "C" fn gow_ret(cpu: *mut GowCpu) {
 pub unsafe extern "C" fn gow_unimpl(cpu: *mut GowCpu, rva: u32, mnemonic: u32) {
     let c = &mut *cpu;
     c.unimpl_hits += 1;
-    if c.unimpl_hits <= 64 {
-        crate::glog!("[gow] UNIMPLEMENTED at rva=0x{rva:x} mnemonic={mnemonic}");
+    // Log the first few of each distinct RVA (dedup by rva) so we see exactly
+    // which instructions are missing in the running game.
+    if c.unimpl_hits <= 4096 {
+        crate::glog!("[gow.UNIMPL] rva=0x{rva:x} mnemonic={mnemonic} hit={}", c.unimpl_hits);
     }
 }
 
