@@ -66,6 +66,8 @@ pub struct GowCpu {
     pub stack_buf: Vec<u8>,
     pub func_map: HashMap<u32, GowFunc>,
     pub teb: u64,
+    /// Owns the TEB/PEB backing memory (valid for the CPU lifetime).
+    pub teb_buf: Vec<u8>,
     pub call_depth: u32,
     pub missing_indirect_calls: u64,
     pub unimpl_hits: u64,
@@ -136,6 +138,18 @@ impl GowCpu {
         // holds a return address and callers' frames live at higher addresses.
         // Starting exactly at the buffer end makes writes like [rsp+8] fault.
         let rsp = unsafe { stack.as_mut_ptr().add(stack.len() - 0x8000) as u64 };
+        // Allocate a real TEB/PEB block (64 KiB) at a stable address so gs:/fs:
+        // accesses land on valid memory. Slot 0x30 points at the PEB (we use a
+        // second region inside the same buffer).
+        let mut teb_buf = vec![0u8; 0x10000];
+        let teb = teb_buf.as_mut_ptr() as u64;
+        // TEB->Self at 0x30 -> PEB pointer (within the same block).
+        let peb = teb + 0x8000;
+        unsafe {
+            *((teb + 0x30) as *mut u64) = peb;
+            // PEB->ImageBaseAddress (0x10) and being-debugged (0x02)=0.
+            *((peb + 0x10) as *mut u64) = image_base;
+        }
         if !fixed {
             crate::glog!("[gow] WARNING: could not map image at 0x{image_base:x}; absolute addresses may fault");
         }
@@ -155,7 +169,8 @@ impl GowCpu {
             image_buf,
             stack_buf: stack,
             func_map: HashMap::new(),
-            teb: 0x7fff_8000_0000,
+            teb,
+            teb_buf,
             call_depth: 0,
             missing_indirect_calls: 0,
             unimpl_hits: 0,
@@ -495,13 +510,26 @@ pub unsafe extern "C" fn gow_unimpl(cpu: *mut GowCpu, rva: u32, mnemonic: u32) {
 
 #[no_mangle]
 pub unsafe extern "C" fn gow_import_call(cpu: *mut GowCpu, iat_rva: u32) {
-    // The recompiler emits this INLINE (the guest `call [IAT]` becomes a direct
-    // host call), so there is no guest return address to pop and control
-    // continues at the next generated instruction. Just run the import handler.
+    // The recompiler emits the guest's `call [IAT]` as this direct host call, so
+    // control continues at the next generated instruction. Just run the handler.
     let _ = match IMPORT_RESOLVER.get() {
         Some(res) => res.as_ref().map(|r| r.call(cpu, iat_rva)).unwrap_or(false),
         None => false,
     };
+}
+
+/// TEB base for `gs:` accesses. The Windows TEB is a per-thread block; we keep a
+/// zeroed region and hand its address out so `mov rax,[gs:0x30]` (the PEB/self
+/// pointer slot) and similar reads return sane, non-faulting memory.
+#[no_mangle]
+pub unsafe extern "C" fn gow_teb_base(cpu: *mut GowCpu) -> u64 {
+    (*cpu).teb
+}
+
+/// FS base (x64 stack canary is at fs:[0x28]); reuse the same block.
+#[no_mangle]
+pub unsafe extern "C" fn gow_fs_base(cpu: *mut GowCpu) -> u64 {
+    (*cpu).teb
 }
 
 static IMPORT_RESOLVER: std::sync::OnceLock<

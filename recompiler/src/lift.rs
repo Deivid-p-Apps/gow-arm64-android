@@ -107,6 +107,7 @@ fn mem_expr(insn: &Instruction, image_base: u64) -> String {
     let index = insn.memory_index();
     let disp = insn.memory_displacement64();
     let scale = insn.memory_index_scale();
+    let seg = insn.memory_segment();
     let mut e = String::new();
     if base != Register::None && base != Register::RIP {
         e.push_str(&format!("GOW_REG(cpu, {})", classify(base).map(|(b, _, _)| b).unwrap_or("rax")));
@@ -120,6 +121,20 @@ fn mem_expr(insn: &Instruction, image_base: u64) -> String {
     } else if disp != 0 {
         if !e.is_empty() { e.push_str(" + "); }
         e.push_str(&format!("0x{disp:x}ull"));
+    }
+    // Segment override: gs: -> TEB base, fs: -> TEB base (Windows uses GS for the
+    // TEB; on x64 the fs base is used by the canary). Resolve via the runtime so
+    // the TEB lives at the guest address the code expects.
+    match seg {
+        Register::GS => {
+            let inner = if e.is_empty() { "0".to_string() } else { e.clone() };
+            return format!("(gow_teb_base(cpu) + ({inner}))");
+        }
+        Register::FS => {
+            let inner = if e.is_empty() { "0".to_string() } else { e.clone() };
+            return format!("(gow_fs_base(cpu) + ({inner}))");
+        }
+        _ => {}
     }
     if e.is_empty() { e.push_str("0"); }
     let _ = image_base;
