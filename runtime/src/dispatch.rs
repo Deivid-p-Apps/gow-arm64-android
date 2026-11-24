@@ -138,17 +138,22 @@ impl GowCpu {
         // holds a return address and callers' frames live at higher addresses.
         // Starting exactly at the buffer end makes writes like [rsp+8] fault.
         let rsp = unsafe { stack.as_mut_ptr().add(stack.len() - 0x8000) as u64 };
-        // Allocate a real TEB/PEB block (64 KiB) at a stable address so gs:/fs:
-        // accesses land on valid memory. Slot 0x30 points at the PEB (we use a
-        // second region inside the same buffer).
-        let mut teb_buf = vec![0u8; 0x10000];
+        // Allocate a real TEB/PEB/TLS block so gs:/fs: accesses land on valid memory.
+        // Windows x64 TEB layout used here:
+        //   0x30 -> PEB (Self)
+        //   0x58 -> ThreadLocalStoragePointer (array of TLS slot values)
+        //   0x148.. -> TlsSlots[64] (inline TLS storage)
+        let mut teb_buf = vec![0u8; 0x14000];
         let teb = teb_buf.as_mut_ptr() as u64;
-        // TEB->Self at 0x30 -> PEB pointer (within the same block).
         let peb = teb + 0x8000;
+        let tls_ptr = teb + 0xC000; // TLS pointer array (distinct from PEB at +0x8000)
         unsafe {
-            *((teb + 0x30) as *mut u64) = peb;
-            // PEB->ImageBaseAddress (0x10) and being-debugged (0x02)=0.
-            *((peb + 0x10) as *mut u64) = image_base;
+            *((teb + 0x30) as *mut u64) = peb;         // TEB->PEB
+            *((peb + 0x10) as *mut u64) = image_base;  // PEB->ImageBaseAddress
+            // 128 TLS slots, all zero (valid array the game indexes into).
+            std::ptr::write_bytes(tls_ptr as *mut u8, 0, 0x800);
+            *((teb + 0x58) as *mut u64) = tls_ptr;     // TEB->ThreadLocalStoragePointer
+            // Inline TlsSlots array at 0x148 (already zeroed).
         }
         if !fixed {
             crate::glog!("[gow] WARNING: could not map image at 0x{image_base:x}; absolute addresses may fault");
