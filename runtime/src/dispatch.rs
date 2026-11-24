@@ -492,17 +492,13 @@ pub unsafe extern "C" fn gow_unimpl(cpu: *mut GowCpu, rva: u32, mnemonic: u32) {
 
 #[no_mangle]
 pub unsafe extern "C" fn gow_import_call(cpu: *mut GowCpu, iat_rva: u32) {
-    // Fetch the return RVA the caller already pushed, resolve+call the host
-    // implementation, then continue at the return RVA.
-    let c = &mut *cpu;
-    let ret = gow_pop64(cpu) as u32;
-    // The resolver is process-global (the game runs on several threads).
-    let handled = match IMPORT_RESOLVER.get() {
+    // The recompiler emits this INLINE (the guest `call [IAT]` becomes a direct
+    // host call), so there is no guest return address to pop and control
+    // continues at the next generated instruction. Just run the import handler.
+    let _ = match IMPORT_RESOLVER.get() {
         Some(res) => res.as_ref().map(|r| r.call(cpu, iat_rva)).unwrap_or(false),
         None => false,
     };
-    let _ = handled;
-    c.next_rva = ret;
 }
 
 static IMPORT_RESOLVER: std::sync::OnceLock<
