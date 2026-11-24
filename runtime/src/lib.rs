@@ -2,6 +2,7 @@
 
 pub mod dispatch;
 pub mod hostcall;
+pub mod crashlog;
 pub mod pe_load;
 pub mod crt;
 pub mod log;

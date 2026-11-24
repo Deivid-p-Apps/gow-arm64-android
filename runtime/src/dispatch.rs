@@ -1322,6 +1322,8 @@ pub unsafe extern "C" fn gow_enter(cpu: *mut GowCpu, frame: u64, level: u64) {
 /// Central dispatch loop. Runs until next_rva == STOP_RVA.
 #[no_mangle]
 pub unsafe extern "C" fn gow_run(cpu: *mut GowCpu, entry_rva: u32) {
+    crate::crashlog::install();
+    crate::crashlog::set_current_cpu(cpu);
     let c = &mut *cpu;
     let map: HashMap<u32, GowFunc> = registry().iter().cloned().collect();
     c.func_map = map;
