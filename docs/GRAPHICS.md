@@ -17,8 +17,83 @@ D3D11 implementation on top of Vulkan.
   deliverable must use.
 
 DXVK Native ships as `libdxvk_d3d11.so` + `libdxvk_dxgi.so`. On the device they
-are loaded with `libadrenotools` driving Turnip (see `android/.../driver_loader.c`),
-the same mechanism emulators use for custom Adreno drivers.
+are loaded by our Rust runtime (`runtime/src/graphics.rs`) and their Vulkan goes
+through **libadrenotools** driving Turnip — the same mechanism emulators use for
+custom Adreno drivers (see §"Custom driver (libadrenotools)" below). The old
+`android/.../driver_loader.c` (a plain `dlopen` of the driver `.so`) is dead: it
+never worked, because the Android loader ignores an ICD dropped into the process.
+
+## Custom driver (libadrenotools)
+
+**Why `dlopen` alone cannot work.** The Android Vulkan loader lives in
+`/system/lib64/libvulkan.so` inside the classloader (isolated) linker namespace.
+It enumerates ICDs through that namespace and loads the vendor driver by name; a
+`dlopen("libvulkan_freedreno.so")` from our process loads the Turnip `.so` but
+nothing ever calls `vk_icdGetInstanceProcAddr` on it, so it is inert.
+
+**The correct path** is [`bylaws/libadrenotools`](https://github.com/bylaws/libadrenotools)
+(BSD-2-Clause). `adrenotools_open_libvulkan(flags, ADRENOTOOLS_DRIVER_CUSTOM,
+tmpLibDir, hookLibDir, driverDir, driverName, nullptr, nullptr)`:
+
+1. creates a private linker namespace rooted at `hookLibDir` (= the app's
+   `nativeLibraryDir`),
+2. loads `libmain_hook.so` + `libhook_impl.so` into it; those intercept the
+   loader's own `android_dlopen_ext` / `android_load_sphal_library` calls,
+3. loads a **fresh copy of `libvulkan.so`** into that namespace with a patched
+   SONAME (from a `memfd` on API ≥ 29), so the loader runs inside the namespace
+   where the hook is active, and
+4. returns a handle to *that* loader. Its driver load is redirected so the
+   vendor ICD is replaced by `driverName` from `driverDir` (app-**private**
+   storage only).
+
+**Everything must then use the returned loader.** Its `vkGetInstanceProcAddr` is
+the only way to reach an instance backed by the custom driver:
+
+- `runtime/src/vk.rs` resolves every entry point through it when a driver is
+  active, else through the system `libvulkan.so`.
+- DXVK resolves Vulkan through one `vkGetInstanceProcAddr` (its
+  `LibraryFn::sym`). We hand DXVK the adrenotools one with a small upstream
+  patch, `tools/patches/0005-dxvk-adrenotools-loader-override.patch`, which adds
+  the exported setter `dxvk_vulkan_set_get_instance_proc_addr(void*)`. The Rust
+  runtime `dlsym`s it from **both** `libdxvk_dxgi.so` and `libdxvk_d3d11.so`
+  (each `.so` has its own copy of the pointer, exactly like
+  `dxvk_android_set_window`) and passes the loader's `vkGetInstanceProcAddr`
+  before the first `D3D11CreateDevice`/`CreateDXGIFactory1` call, which is where
+  DXVK lazily loads `libvulkan.so`.
+
+So DXVK does **not** read an env var and is not patched to call adrenotools
+itself (the older C&C Generals port relied on the hook catching DXVK's stock
+`LoadLibraryA("libvulkan.so") = dlopen(...)`, which is fragile w.r.t. the
+namespace the loader is dlopened from). We pass the loader pointer explicitly —
+deterministic, and DXVK keeps working unchanged on the system driver when no
+custom driver is selected.
+
+**Packaging requirements (met):**
+
+- `android/app/build.gradle.kts` keeps `useLegacyPackaging = true`, so
+  `libadrenotools.so` and the four hook `.so`s are **extracted** into
+  `nativeLibraryDir` (`libmain_hook.so`, `libhook_impl.so`,
+  `libfile_redirect_hook.so`, `libgsl_alloc_hook.so`). If they were read from the
+  APK (legacy packaging off) `adrenotools_open_libvulkan` would return a loader
+  whose hook then fails and silently falls back to the vendor driver.
+- `hookLibDir` is `nativeLibraryDir`. The Rust layer obtains it with `dladdr` on
+  its own `.so`, so no JNI round-trip is needed.
+- The driver `.so` must be in app-private storage; the launcher copies the chosen
+  package there before calling `nativeLoadDriverFile` (see below).
+
+**Verification:** green CI run **45473778373**. The `adrenotools` job builds
+`libadrenotools.so` + hooks from the pinned commit
+`8fae8ce254dfc1344527e05301e43f37dea2df80` (with the `lib/linkernsbypass`
+submodule) and publishes them to release `adrenotools-latest`; the `android` job
+stages them into `jniLibs/arm64-v8a/`. The APK's `lib/arm64-v8a/` then contains
+`libadrenotools.so`, `libmain_hook.so`, `libhook_impl.so`,
+`libfile_redirect_hook.so`, `libgsl_alloc_hook.so`, and DXVK exports
+`dxvk_vulkan_set_get_instance_proc_addr`.
+
+**Fallback.** With no driver chosen, or if `libadrenotools.so` is absent /
+`adrenotools_open_libvulkan` fails, `adrenotools::instance_proc_addr()` returns
+`None`, `vk.rs` and DXVK both use the system `libvulkan.so`, and the failure is
+logged loudly. It never crashes.
 
 ## Why not just Vulkan directly
 

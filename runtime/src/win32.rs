@@ -489,6 +489,18 @@ impl ImportResolver {
                     _ => { c.gpr.rax = 0x48f; true }
                 }
             }
+            ("steam_api64.dll", f) | ("steam_api.dll", f) => {
+                // Steamworks stubs (Init succeeds, callbacks accepted). Real
+                // behaviour is unnecessary: the game boots without Steam.
+                c.gpr.rax = crate::steam::steam_api64(f).unwrap_or(0);
+                true
+            }
+            (dll, _) if dll.starts_with("libsce") => {
+                // Sony compatibility DLLs (libSceGnm/Pad/JobManager/GpuAddress):
+                // return a non-null handle so callers don't deref null.
+                c.gpr.rax = crate::steam::sce(func.as_str()).unwrap_or(0);
+                true
+            }
             ("user32.dll", "GetAsyncKeyState") | ("user32.dll", "GetKeyState") => {
                 let vk = (a0 & 0xff) as u16;
                 c.gpr.rax = if crate::input::global().vk_down(vk) { 0x8000 } else { 0 };

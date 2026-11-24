@@ -17,7 +17,6 @@ pub struct VkContext {
 
 /// Minimal Vulkan entry points, resolved from a loader's `vkGetInstanceProcAddr`.
 struct VkFns {
-    create_instance: unsafe extern "system" fn(*const u8, *const u8, *const u8, *mut u64) -> i32,
     enumerate_physical_devices: unsafe extern "system" fn(u64, *mut u32, *mut u64) -> i32,
     create_device: unsafe extern "system" fn(u64, *const u8, *const u8, *mut u64) -> i32,
     get_device_queue: unsafe extern "system" fn(u64, u32, u32, *mut u64),
@@ -101,7 +100,6 @@ impl VkContext {
             }
 
             let f = VkFns {
-                create_instance,
                 enumerate_physical_devices: std::mem::transmute(resolve(gipa, inst, "vkEnumeratePhysicalDevices")),
                 create_device: std::mem::transmute(resolve(gipa, inst, "vkCreateDevice")),
                 get_device_queue: std::mem::transmute(resolve(gipa, inst, "vkGetDeviceQueue")),

@@ -143,6 +143,14 @@ cpp_link_args = ['-Wl,-z,max-page-size=16384']
 5. `call_addr`/`call_addr_raw` forward **10** Microsoft-x64 arguments (args 1–4
    from `rcx,rdx,r8,r9`, args 5–10 from `[rsp+0x28]..[rsp+0x50]`), which is
    exactly the arity of `D3D11CreateDevice`.
+6. **Custom driver (libadrenotools, patch P7 = `0005-*`).** When a Turnip package
+   is chosen, `runtime/src/adrenotools.rs` opens the loader with
+   `adrenotools_open_libvulkan`, and `GraphicsBridge::set_vulkan_loader` (called
+   from `autoload`) `dlsym`s `dxvk_vulkan_set_get_instance_proc_addr` from both
+   DXVK libs and passes it the loader's `vkGetInstanceProcAddr`, **before** the
+   first D3D call. DXVK's `vk::LibraryFn::sym` then resolves every entry point
+   through the custom driver. No driver ⇒ nothing is pushed and DXVK loads the
+   system `libvulkan.so` as before. See `docs/GRAPHICS.md` §"Custom driver".
 
 ### 10.4 Still open
 
