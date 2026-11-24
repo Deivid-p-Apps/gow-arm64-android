@@ -460,14 +460,18 @@ fn run_game_library(path: CString, pdir: &str, gdir: &str, image_base: u64, imag
         for cb in &info.tls_callbacks {
             let rva = (*cb).wrapping_sub(image_base);
             if rva < 0xffff_ffff {
-                crate::glog!("[gow.tls] callback rva=0x{rva:x} (DLL_PROCESS_ATTACH)");
                 let c = cpu.as_mut() as *mut crate::dispatch::GowCpu;
-                unsafe {
-                    (*c).gpr.rcx = image_base;   // hinstDLL
-                    (*c).gpr.rdx = 1;            // DLL_PROCESS_ATTACH
-                    (*c).gpr.r8 = 0;             // lpvReserved
+                // The CRT's TLS callback runs for both PROCESS_ATTACH (1) and
+                // THREAD_ATTACH (2); some do their work only on one of them.
+                for reason in [1u64, 2u64] {
+                    crate::glog!("[gow.tls] callback rva=0x{rva:x} reason={reason}");
+                    unsafe {
+                        (*c).gpr.rcx = image_base; // hinstDLL
+                        (*c).gpr.rdx = reason;
+                        (*c).gpr.r8 = 0; // lpvReserved
+                        crate::dispatch::gow_run(c, rva as u32);
+                    }
                 }
-                unsafe { crate::dispatch::gow_run(c, rva as u32) };
             }
         }
     }
