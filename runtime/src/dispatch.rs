@@ -70,6 +70,7 @@ pub struct GowCpu {
     pub call_depth: u32,
     pub missing_indirect_calls: u64,
     pub unimpl_hits: u64,
+    pub unimpl_seen: std::collections::HashSet<u32>,
     /// Win32 import dispatch: IAT RVA -> host handler id.
     pub import_map: HashMap<u32, u32>,
     /// x87 FPU state (Rust-side; after the C-visible prefix on purpose).
@@ -204,6 +205,7 @@ impl GowCpu {
             call_depth: 0,
             missing_indirect_calls: 0,
             unimpl_hits: 0,
+            unimpl_seen: std::collections::HashSet::new(),
             import_map: HashMap::new(),
         })
     }
@@ -576,10 +578,10 @@ pub unsafe extern "C" fn gow_ret(cpu: *mut GowCpu) {
 pub unsafe extern "C" fn gow_unimpl(cpu: *mut GowCpu, rva: u32, mnemonic: u32) {
     let c = &mut *cpu;
     c.unimpl_hits += 1;
-    // Log the first few of each distinct RVA (dedup by rva) so we see exactly
-    // which instructions are missing in the running game.
-    if c.unimpl_hits <= 4096 {
-        crate::glog!("[gow.UNIMPL] rva=0x{rva:x} mnemonic={mnemonic} hit={}", c.unimpl_hits);
+    // Log each distinct missing RVA once (dedup), so the log lists the actual
+    // coverage holes instead of repeating a hot loop thousands of times.
+    if c.unimpl_seen.insert(rva) {
+        crate::glog!("[gow.UNIMPL] rva=0x{rva:x} mnemonic={mnemonic}");
     }
 }
 
