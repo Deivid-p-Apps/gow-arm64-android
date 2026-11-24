@@ -74,6 +74,9 @@ pub struct GowCpu {
     pub import_map: HashMap<u32, u32>,
     /// x87 FPU state (Rust-side; after the C-visible prefix on purpose).
     pub fpu: crate::x87::Fpu,
+    /// Ring buffer of recent call target RVAs (diagnostics only).
+    pub call_trace: [u32; 32],
+    pub call_trace_pos: u32,
 }
 
 unsafe impl Send for GowCpu {}
@@ -182,6 +185,8 @@ impl GowCpu {
             gpr: Gprs { rsp, ..Default::default() },
             xmm: [Xmm::default(); 17],
             fpu: crate::x87::Fpu::default(),
+            call_trace: [0; 32],
+            call_trace_pos: 0,
             rip: 0,
             flags: 0,
             mxcsr: 0x1f80,
@@ -337,6 +342,7 @@ pub unsafe extern "C" fn gow_store(cpu: *mut GowCpu, addr: u64, v: u64, size: u3
         let c = &*cpu;
         crate::glog!("[gow.badstore] store addr=0x{addr:x} size={size} rva=0x{:x} rsp=0x{:x} rbp=0x{:x} rdi=0x{:x} rsi=0x{:x} rcx=0x{:x} rax=0x{:x}",
             c.rip.wrapping_sub(c.image_base), c.gpr.rsp, c.gpr.rbp, c.gpr.rdi, c.gpr.rsi, c.gpr.rcx, c.gpr.rax);
+        crate::glog!("[gow.trace] recent calls: {}", format_trace(c));
         return;
     }
     let p = addr as *mut u8;
@@ -569,6 +575,28 @@ pub unsafe extern "C" fn gow_unimpl(cpu: *mut GowCpu, rva: u32, mnemonic: u32) {
     if c.unimpl_hits <= 64 {
         crate::glog!("[gow] UNIMPLEMENTED at rva=0x{rva:x} mnemonic={mnemonic}");
     }
+}
+
+/// Format the recent call ring (oldest first).
+pub fn format_trace(c: &GowCpu) -> String {
+    let n = (c.call_trace_pos & 31) as usize;
+    let mut out = String::new();
+    for k in 0..32 {
+        let idx = (n + k) & 31;
+        let v = c.call_trace[idx];
+        if v != 0 {
+            out.push_str(&format!("0x{v:x} "));
+        }
+    }
+    out
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn gow_trace_enter(cpu: *mut GowCpu, rva: u32) {
+    let c = &mut *cpu;
+    let i = (c.call_trace_pos & 31) as usize;
+    c.call_trace[i] = rva;
+    c.call_trace_pos = c.call_trace_pos.wrapping_add(1);
 }
 
 #[no_mangle]
@@ -1368,18 +1396,6 @@ pub unsafe extern "C" fn gow_cmps(cpu: *mut GowCpu, size: u32) {
     gow_sub64(cpu, a, b, size * 8);
     c.gpr.rsi = c.gpr.rsi.wrapping_add(step);
     c.gpr.rdi = c.gpr.rdi.wrapping_add(step);
-}
-#[no_mangle]
-pub unsafe extern "C" fn gow_enter(cpu: *mut GowCpu, frame: u64, level: u64) {
-    let c = &mut *cpu;
-    gow_push64(cpu, c.gpr.rbp);
-    let sp = c.gpr.rsp;
-    if level > 0 {
-        for _ in 1..level { c.gpr.rbp = c.gpr.rbp.wrapping_sub(8); gow_push64(cpu, gow_load(cpu, c.gpr.rbp, 8)); }
-        gow_push64(cpu, sp);
-    }
-    c.gpr.rbp = sp;
-    c.gpr.rsp = c.gpr.rsp.wrapping_sub(frame);
 }
 
 /// Central dispatch loop. Runs until next_rva == STOP_RVA.

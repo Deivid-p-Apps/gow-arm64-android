@@ -508,6 +508,7 @@ fn emit(c: &mut String, insn: &Instruction, image_base: u64, iat: &std::collecti
                 // Emulate the x86 `call`: push the return address so the callee's
                 // [rsp]/shadow-space layout matches real hardware, then pop it.
                 writeln!(c, "  gow_push64(cpu, 0x{ret:x}u);")?;
+                writeln!(c, "  gow_trace_enter(cpu, 0x{t:x}u);")?;
                 if entries.contains(&t) {
                     writeln!(c, "  f_{t:x}(cpu);")?;
                 } else {
