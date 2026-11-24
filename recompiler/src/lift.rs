@@ -232,9 +232,8 @@ pub fn lift(pe: &PeImage, out_dir: &std::path::Path) -> Result<LiftOutput> {
             let snapshot: Vec<u32> = entries.iter().cloned().collect();
             for &start in &snapshot {
                 // Body end: pdata end if known, else the next entry (capped).
-                let pd_end = pd.binary_search_by_key(&start, |r| r.0).ok().map(|i| pd[i].1);
                 let next = entries.range((start + 1)..).next().copied().unwrap_or(tend);
-                let end = pd_end.unwrap_or(next).min(next).min(tend);
+                let end = next.min(tend);
                 if end <= start { continue; }
                 let off = match PeImage::rva_to_off(&pe.sections, start) { Some(o) => o, None => continue };
                 let len = (end - start) as usize;
@@ -297,9 +296,10 @@ pub fn lift(pe: &PeImage, out_dir: &std::path::Path) -> Result<LiftOutput> {
     // For a function start, its code ends at its .pdata end if known, else at the
     // next known entry (capped) — never a blind 64 KB.
     let func_end = |start: u32| -> u32 {
-        let pd = pdata_sorted.binary_search_by_key(&start, |r| r.0).ok().map(|i| pdata_sorted[i].1);
-        let next = entries.range((start + 1)..).next().copied().unwrap_or(text_end);
-        pd.unwrap_or_else(|| next.min(start + 0x4000)).min(text_end).max(start + 1)
+        // .pdata end is often too short (code continues past it). The next known
+        // entry is the real bound; fall back to +0x4000 only for the last one.
+        let next = entries.range((start + 1)..).next().copied().unwrap_or((start + 0x4000).min(text_end));
+        next.min(text_end).max(start + 1)
     };
 
     let mut shard_protos = String::new();

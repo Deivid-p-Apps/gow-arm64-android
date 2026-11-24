@@ -84,6 +84,16 @@ pub fn LANES32(v: [u64; 2]) -> [u32; 4] {
     [v[0] as u32, (v[0] >> 32) as u32, v[1] as u32, (v[1] >> 32) as u32]
 }
 
+/// Allocate a zeroed, process-lifetime block (leaked on purpose) for guest
+/// structures like per-module TLS blocks.
+fn alloc_guest_block(size: usize) -> *mut u8 {
+    let layout = match std::alloc::Layout::from_size_align(size.max(0x1000), 0x1000) {
+        Ok(l) => l,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    unsafe { std::alloc::alloc_zeroed(layout) }
+}
+
 /// Map `size` bytes at the fixed address `base` (MAP_FIXED). Returns
 /// (pointer, owned Vec, whether mapping succeeded). On failure, falls back to a
 /// normal Vec so the program still runs (with a logged warning).
@@ -150,8 +160,17 @@ impl GowCpu {
         unsafe {
             *((teb + 0x30) as *mut u64) = peb;         // TEB->PEB
             *((peb + 0x10) as *mut u64) = image_base;  // PEB->ImageBaseAddress
-            // 128 TLS slots, all zero (valid array the game indexes into).
+            // 128 TLS slots. Each slot must point at a REAL per-module TLS block
+            // (Windows' loader allocates one per module index). A null slot makes
+            // code like `mov rax,[gs:0x58]; mov rdx,[rax]; mov [rdx+0x80],..` fault.
             std::ptr::write_bytes(tls_ptr as *mut u8, 0, 0x800);
+            for i in 0..128u64 {
+                let blk = alloc_guest_block(0x1000);
+                if !blk.is_null() {
+                    std::ptr::write_bytes(blk, 0, 0x1000);
+                    *((tls_ptr + i * 8) as *mut u64) = blk as u64;
+                }
+            }
             *((teb + 0x58) as *mut u64) = tls_ptr;     // TEB->ThreadLocalStoragePointer
             // Inline TlsSlots array at 0x148 (already zeroed).
         }
