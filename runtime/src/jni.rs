@@ -126,6 +126,25 @@ pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeClearTouchLayout(
 /// (commonly `libvulkan_freedreno.so`). Android cannot dlopen from external
 /// storage, so the driver is copied into `priv_dir` first. The Vulkan loader
 /// picks it up via the driver search path set here.
+/// Load a driver the user picked directly (absolute path to a `.so` on shared
+/// storage). It is copied into `priv_dir` (required before dlopen) and loaded.
+#[no_mangle]
+pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeLoadDriverFile(
+    env: *mut std::ffi::c_void,
+    _thiz: *mut std::ffi::c_void,
+    driver_lib: *mut std::ffi::c_void,
+    priv_dir: *mut std::ffi::c_void,
+) -> c_int {
+    let lib = unsafe { jstring_to_string(env, driver_lib) };
+    let pdir = unsafe { jstring_to_string(env, priv_dir) };
+    if lib.is_empty() {
+        crate::glog!("[gow.driver] no explicit driver; using system Vulkan");
+        return -1;
+    }
+    crate::glog!("[gow.driver] loading chosen driver: {lib}");
+    stage_and_load_driver(&lib, &pdir)
+}
+
 #[no_mangle]
 pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeLoadDriver(
     env: *mut std::ffi::c_void,
@@ -170,7 +189,13 @@ pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeLoadDriver(
 }
 
 fn stage_and_load_driver(src: &str, priv_dir: &str) -> c_int {
-    let dst = format!("{priv_dir}/libvulkan_freedreno.so");
+    // Preserve the source file name (a driver package may name it
+    // vulkan.ad07XX.so, vulkan.purple.so, etc.).
+    let base = std::path::Path::new(src)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("libvulkan_freedreno.so");
+    let dst = format!("{priv_dir}/{base}");
     // Don't copy a file onto itself (fs::copy truncates the destination first,
     // which would leave a 0-byte file and make dlopen fail).
     let dst_path = std::path::Path::new(&dst);

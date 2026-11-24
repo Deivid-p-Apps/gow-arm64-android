@@ -27,10 +27,14 @@ import java.io.File;
  */
 public class GowActivity extends Activity implements SurfaceHolder.Callback {
     private static final String TAG = "GoW";
+
+    /** Absolute path to the chosen driver .so (empty = system driver). */
+    public static final String EXTRA_DRIVER_LIB = "driver_lib";
     static { System.loadLibrary("gow_runtime"); }
 
     private native int nativeInit(String gameDir);
     private native int nativeLoadDriver(String driversDir, String privDir);
+    private native int nativeLoadDriverFile(String driverLibPath, String privDir);
     private native int nativeLoadAndRun(String gameDir, String privDir,
                                         long imageBase, long imageSize, int entryRva);
     private native void nativeSurfaceCreated(Surface surface);
@@ -99,16 +103,27 @@ public class GowActivity extends Activity implements SurfaceHolder.Callback {
         final int ENTRY_RVA = 0x3ec680;
         String privDir = getApplicationInfo().nativeLibraryDir;
 
-        // Load a custom Vulkan driver (Turnip) from the drivers folder before
-        // bringing up Vulkan. It must be copied into a WRITABLE app-private dir
-        // (nativeLibraryDir is read-only) before dlopen.
-        String driversDir = new java.io.File(godDir, "drivers").getAbsolutePath();
-        String writeDir = getFilesDir().getAbsolutePath();
-        int dr = nativeLoadDriver(driversDir, writeDir);
-        Log.i(TAG, "nativeLoadDriver returned " + dr);
+        // Driver chosen in DriverSetupActivity (absolute path to the .so), or the
+        // first package in /god/drivers when launched directly.
+        String driverLib = getIntent() != null
+                ? getIntent().getStringExtra(EXTRA_DRIVER_LIB) : null;
+        final String fDriverLib = (driverLib == null) ? "" : driverLib;
 
-        int rc = nativeLoadAndRun(godDir.getAbsolutePath(), privDir, IMAGE_BASE, IMAGE_SIZE, ENTRY_RVA);
-        Log.i(TAG, "nativeLoadAndRun returned " + rc);
+        // Loading the game blocks this thread, so run it OFF the UI thread; the
+        // SurfaceView + gamepad overlay stay responsive and visible meanwhile.
+        new Thread(() -> {
+            String writeDir = getFilesDir().getAbsolutePath();
+            if (!fDriverLib.isEmpty()) {
+                int dr = nativeLoadDriverFile(fDriverLib, writeDir);
+                Log.i(TAG, "nativeLoadDriverFile(" + fDriverLib + ") = " + dr);
+            } else {
+                String driversDir = new java.io.File(godDir, "drivers").getAbsolutePath();
+                int dr = nativeLoadDriver(driversDir, writeDir);
+                Log.i(TAG, "nativeLoadDriver = " + dr);
+            }
+            int rc = nativeLoadAndRun(godDir.getAbsolutePath(), privDir, IMAGE_BASE, IMAGE_SIZE, ENTRY_RVA);
+            Log.i(TAG, "nativeLoadAndRun returned " + rc);
+        }, "gow-main").start();
     }
 
     @Override
