@@ -331,6 +331,10 @@ fn run_game_library(path: CString, pdir: &str, gdir: &str, image_base: u64, imag
     // from the manifest the recompiler emitted next to the shards.
     install_import_resolver(handle, &pdir, &gdir);
 
+    // Load the DXVK Native backend from the APK's native library dir and hand it
+    // the current ANativeWindow, before the entry point runs.
+    start_graphics_backend(&pdir);
+
     let mut cpu = GowCpu::new(image_base, image_size as usize);
     // Load the PE image (sections) into the guest memory mapped at the original
     // base, so absolute addresses in the recompiled code are valid.
@@ -349,6 +353,31 @@ fn run_game_library(path: CString, pdir: &str, gdir: &str, image_base: u64, imag
 /// ANativeWindow handle for the Vulkan swapchain (set from Java surface callbacks).
 static mut WINDOW: *mut std::ffi::c_void = std::ptr::null_mut();
 
+/// The one `GraphicsBridge` the JNI layer and the import resolver share. All of
+/// its state is process-global (see `graphics.rs`), so the surface callbacks can
+/// push the window into the same DXVK libraries the resolver calls.
+fn graphics_bridge() -> &'static crate::graphics::GraphicsBridge {
+    static BRIDGE: std::sync::OnceLock<crate::graphics::GraphicsBridge> = std::sync::OnceLock::new();
+    BRIDGE.get_or_init(crate::graphics::GraphicsBridge::new)
+}
+
+/// Load the DXVK Native backend (if shipped in the APK) and hand it the current
+/// `ANativeWindow`. Called from `run_game_library` before the guest entry point
+/// runs, so `D3D11CreateDevice` resolves instead of hitting the unimplemented
+/// import path.
+fn start_graphics_backend(native_lib_dir: &str) {
+    let g = graphics_bridge();
+    if !g.autoload(native_lib_dir) {
+        return; // runtime-only APK; the game will report the unresolved import.
+    }
+    let win = unsafe { WINDOW };
+    if !win.is_null() {
+        g.set_android_window(win);
+    } else {
+        crate::glog!("[gow.gfx] backend loaded but no ANativeWindow yet; pushed on surfaceCreated");
+    }
+}
+
 #[no_mangle]
 pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeSurfaceCreated(
     env: *mut std::ffi::c_void,
@@ -360,13 +389,19 @@ pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeSurfaceCreated(
     unsafe { WINDOW = android_win };
     crate::glog!("[gow] surface created: ANativeWindow={:p}", android_win);
 
+    if android_win.is_null() {
+        return;
+    }
+
+    // Push the window into both loaded DXVK libraries (each keeps its own copy).
+    // If they are not loaded yet, `start_graphics_backend` does it after dlopen.
+    graphics_bridge().set_android_window(android_win);
+
     // Bring up Vulkan on the window (Turnip driver via libadrenotools when
     // present). Failure here is reported, never hidden.
-    if !android_win.is_null() {
-        match crate::vk::VkContext::new(android_win, "GoW arm64") {
-            Some(ctx) => unsafe { VK = Some(ctx); },
-            None => crate::glog!("[gow] Vulkan init failed (driver missing?)"),
-        }
+    match crate::vk::VkContext::new(android_win, "GoW arm64") {
+        Some(ctx) => unsafe { VK = Some(ctx); },
+        None => crate::glog!("[gow] Vulkan init failed (driver missing?)"),
     }
 }
 
@@ -380,6 +415,11 @@ pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeSurfaceChanged(
     h: c_int,
 ) {
     crate::glog!("[gow] surface changed: {w}x{h}");
+    // Surface (and possibly the ANativeWindow) changed: re-push to both libs.
+    let win = unsafe { WINDOW };
+    if !win.is_null() {
+        graphics_bridge().set_android_window(win);
+    }
 }
 
 #[no_mangle]
@@ -388,6 +428,9 @@ pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeSurfaceDestroyed(
     _thiz: *mut std::ffi::c_void,
 ) {
     unsafe { WINDOW = std::ptr::null_mut(); }
+    // Tell DXVK the window is gone so createSurface fails loudly rather than
+    // presenting to a stale ANativeWindow.
+    graphics_bridge().set_android_window(std::ptr::null_mut());
     crate::glog!("[gow] surface destroyed");
 }
 

@@ -42,6 +42,140 @@ jobs:
             target/release/gowrecomp
             tools/
 
+  dxvk:
+    name: Build DXVK Native (d3d11+dxgi) for Android arm64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Android NDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'ndk;27.2.12479018'
+      - name: Host build tools (meson, ninja, glslang)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build glslang-tools meson
+          # dxbc-spirv needs meson >= 1.0; upgrade from PyPI if apt is older.
+          if [ "$(meson --version | cut -d. -f1)" -lt 1 ]; then
+            pip3 install --break-system-packages --upgrade meson
+          fi
+          echo "meson $(meson --version)"
+          echo "ninja $(ninja --version)"
+          # glslang must be a *host* binary: it turns DXVK's own GLSL into *.h.
+          glslangValidator --version | head -1
+      - name: Clone DXVK v3.1.1 with submodules
+        run: |
+          git clone --recursive --depth 1 --branch v3.1.1 \
+            https://github.com/doitsujin/dxvk.git dxvk-src
+          git -C dxvk-src submodule update --init --recursive --depth 1
+          # dxbc-spirv + libdisplay-info are subprojects (no .wrap) -> required.
+          test -f dxvk-src/subprojects/dxbc-spirv/meson.build
+          test -f dxvk-src/subprojects/libdisplay-info/meson.build
+          test -f dxvk-src/include/vulkan/include/vulkan/vulkan.h
+      - name: Apply Android patches (tools/patches)
+        run: |
+          cd dxvk-src
+          for p in "$GITHUB_WORKSPACE"/tools/patches/*.patch; do
+            echo "::group::git apply $(basename "$p")"
+            git apply --verbose "$p"
+            echo "::endgroup::"
+          done
+          echo "--- patch verification ---"
+          grep -q "DXVK_WSI_ANDROID" meson.build
+          test -f src/wsi/android/wsi_platform_android.cpp
+          grep -q "dxvk_android_set_window" src/d3d11/d3d11.sym src/dxgi/dxgi.sym
+      - name: Write Meson cross file
+        run: |
+          NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
+          TC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          cat > android-arm64.ini <<EOF
+          [binaries]
+          c          = '$TC/aarch64-linux-android29-clang'
+          cpp        = '$TC/aarch64-linux-android29-clang++'
+          ar         = '$TC/llvm-ar'
+          strip      = '$TC/llvm-strip'
+          pkg-config = 'pkg-config'
+
+          [properties]
+          needs_exe_wrapper = false
+
+          [host_machine]
+          system     = 'android'
+          kernel     = 'linux'
+          cpu_family = 'aarch64'
+          cpu        = 'aarch64'
+          endian     = 'little'
+
+          [built-in options]
+          c_args        = ['-fPIC']
+          cpp_args      = ['-fPIC']
+          c_link_args   = ['-Wl,-z,max-page-size=16384']
+          cpp_link_args = ['-Wl,-z,max-page-size=16384']
+          EOF
+          cat android-arm64.ini
+      - name: Configure (Android WSI, d3d11+dxgi only)
+        run: |
+          # No -Dnative=true: native mode is selected by system != 'windows'.
+          # Route B: the Android WSI backend (P3/P4) removes the SDL/GLFW need.
+          meson setup build dxvk-src \
+            --cross-file android-arm64.ini \
+            --buildtype release \
+            -Dnative_sdl2=disabled \
+            -Dnative_sdl3=disabled \
+            -Dnative_glfw=disabled \
+            -Denable_d3d8=false \
+            -Denable_d3d9=false \
+            -Denable_d3d10=false \
+            -Denable_d3d11=true \
+            -Denable_dxgi=true
+      - name: Build the two libraries
+        run: |
+          ninja -C build src/d3d11/libdxvk_d3d11.so src/dxgi/libdxvk_dxgi.so
+          ls -la build/src/d3d11/libdxvk_d3d11.so build/src/dxgi/libdxvk_dxgi.so
+      - name: Verify symbols, packaging properties and strip
+        run: |
+          NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
+          READELF="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+          STRIP="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+          mkdir -p dist
+          cp build/src/d3d11/libdxvk_d3d11.so dist/
+          cp build/src/dxgi/libdxvk_dxgi.so dist/
+          # Android packages lib<name>.so with an unversioned SONAME (P5b).
+          for so in dist/libdxvk_d3d11.so dist/libdxvk_dxgi.so; do
+            "$READELF" -d "$so" | grep -E 'SONAME|NEEDED' || true
+          done
+          # The symbols the runtime resolves with dlsym().
+          "$READELF" --dyn-syms -W dist/libdxvk_dxgi.so | grep -E 'CreateDXGIFactory1|dxvk_android_set_window'
+          "$READELF" --dyn-syms -W dist/libdxvk_d3d11.so | grep -E 'D3D11CreateDevice|dxvk_android_set_window'
+          # Assert the exact names the bridge calls are present (fail loudly).
+          "$READELF" --dyn-syms -W dist/libdxvk_dxgi.so | grep -q 'CreateDXGIFactory1'
+          "$READELF" --dyn-syms -W dist/libdxvk_dxgi.so | grep -q 'dxvk_android_set_window'
+          "$READELF" --dyn-syms -W dist/libdxvk_d3d11.so | grep -q 'D3D11CreateDevice'
+          "$READELF" --dyn-syms -W dist/libdxvk_d3d11.so | grep -q 'dxvk_android_set_window'
+          # 16 KB page alignment for Android 15 devices.
+          "$READELF" -lW dist/libdxvk_d3d11.so | grep -E 'LOAD' | head -3
+          "$STRIP" --strip-debug dist/libdxvk_d3d11.so dist/libdxvk_dxgi.so
+          ls -la dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dxvk-android-arm64
+          path: |
+            dist/libdxvk_d3d11.so
+            dist/libdxvk_dxgi.so
+      - name: Publish to a private release
+        if: ${{ vars.DXVK_OUT_TAG != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ vars.DXVK_OUT_TAG }}"
+          gh release view "$TAG" -R "${{ github.repository }}" >/dev/null 2>&1 \
+            || gh release create "$TAG" -R "${{ github.repository }}" \
+                 --title "DXVK Native (Android arm64)" --prerelease \
+                 --notes "libdxvk_d3d11.so + libdxvk_dxgi.so built from doitsujin/dxvk v3.1.1 with the Android WSI patches in tools/patches/."
+          gh release upload "$TAG" dist/libdxvk_d3d11.so dist/libdxvk_dxgi.so --clobber \
+            -R "${{ github.repository }}"
+          gh release view "$TAG" -R "${{ github.repository }}" --json assets -q '.assets[].name'
+
   game_so:
     name: Compile recompiled game into libgow_game.so (arm64)
     # Optional: only runs when SHARDS_ASSET points at a release with shards.tar.gz.
@@ -149,6 +283,25 @@ jobs:
             echo "REPACK_ASSET not set; APK is runtime-only (game .so loaded from device storage)"
           fi
           ls -la android/app/src/main/jniLibs/arm64-v8a/ || true
+      - name: Stage DXVK Native d3d11+dxgi (if published)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # DXVK is built by the `dxvk` job and published to the DXVK_OUT_TAG
+          # release. Allow an explicit override via vars.DXVK_ASSET.
+          TAG="${{ vars.DXVK_ASSET }}"
+          [ -z "$TAG" ] && TAG="${{ vars.DXVK_OUT_TAG }}"
+          DEST=android/app/src/main/jniLibs/arm64-v8a
+          mkdir -p "$DEST"
+          if [ -z "$TAG" ]; then
+            echo "DXVK_ASSET/DXVK_OUT_TAG not set; APK is runtime-only (no D3D11 backend)"
+          else
+            gh release download "$TAG" -R "${{ github.repository }}" \
+              -p 'libdxvk_d3d11.so' -p 'libdxvk_dxgi.so' -D "$DEST" --clobber \
+              && echo "staged DXVK d3d11+dxgi from release $TAG" \
+              || echo "no DXVK .so on release $TAG; APK continues without a D3D11 backend"
+          fi
+          ls -la "$DEST" || true
       - name: Assemble debug APK
         working-directory: android
         run: gradle assembleDebug --no-daemon
