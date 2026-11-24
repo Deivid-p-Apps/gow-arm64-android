@@ -100,9 +100,11 @@ public class GowActivity extends Activity implements SurfaceHolder.Callback {
         String privDir = getApplicationInfo().nativeLibraryDir;
 
         // Load a custom Vulkan driver (Turnip) from the drivers folder before
-        // bringing up Vulkan, so the swapchain uses it.
+        // bringing up Vulkan. It must be copied into a WRITABLE app-private dir
+        // (nativeLibraryDir is read-only) before dlopen.
         String driversDir = new java.io.File(godDir, "drivers").getAbsolutePath();
-        int dr = nativeLoadDriver(driversDir, privDir);
+        String writeDir = getFilesDir().getAbsolutePath();
+        int dr = nativeLoadDriver(driversDir, writeDir);
         Log.i(TAG, "nativeLoadDriver returned " + dr);
 
         int rc = nativeLoadAndRun(godDir.getAbsolutePath(), privDir, IMAGE_BASE, IMAGE_SIZE, ENTRY_RVA);

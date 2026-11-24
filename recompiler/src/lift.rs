@@ -493,6 +493,20 @@ fn emit(c: &mut String, insn: &Instruction, image_base: u64, iat: &std::collecti
                     // Unknown in-image target (e.g. computed): route through trampoline.
                     writeln!(c, "  gow_jump(cpu, 0x{t:x}u); return;")?;
                 }
+            } else if insn.op0_kind() == OpKind::Memory {
+                // `jmp qword [rip+disp]` is an import thunk (`jmp [__imp_X]`).
+                // The IAT slot holds no host pointer, so dispatch it as an import
+                // call just like `call [IAT]`.
+                if let Some(va) = mem_target_va(insn, image_base) {
+                    if let Some(slot_rva) = iat_slot(iat, va, image_base) {
+                        writeln!(c, "  gow_import_call(cpu, 0x{slot_rva:x}u); return;")?;
+                        return Ok(true);
+                    }
+                }
+                match operand_read(insn, 0, image_base) {
+                    Some(e) => writeln!(c, "  gow_call_indirect(cpu, (uint64_t)({e})); return;")?,
+                    None => { trap(c, insn, image_base, unimpl, un)?; }
+                }
             } else {
                 match operand_read(insn, 0, image_base) {
                     Some(e) => writeln!(c, "  gow_call_indirect(cpu, (uint64_t)({e})); return;")?,
