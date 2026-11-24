@@ -351,8 +351,11 @@ pub unsafe extern "C" fn gow_store_xmm(cpu: *mut GowCpu, reg: u32, addr: u64) {
 pub fn plausible_mem(addr: u64, len: u64) -> bool {
     if addr < 0x1000 { return false; }
     let end = match addr.checked_add(len) { Some(e) => e, None => return false };
-    // Reject the canonical "wild" range (top of the address space).
-    if addr >= 0x0000_8000_0000_0000 { return false; }
+    // Android user addresses span up to ~0x7fff_ffff_ffff on arm64 (and stack
+    // mappings can sit around 0xb400...). Only reject the truly impossible:
+    // kernel range (> 0xffff_0000_0000), the null page, and 0xffffffff...
+    if addr >= 0xffff_0000_0000_0000 { return false; }
+    if addr > 0x0000_00ff_ffff_ffff_ffff { return false; }
     let _ = end;
     true
 }

@@ -216,59 +216,48 @@ pub fn lift(pe: &PeImage, out_dir: &std::path::Path) -> Result<LiftOutput> {
         }
     }
 
-    // The MSVC linker emits some functions (leaf/thunk code) that are absent
-    // from the .pdata exception table. Discover them by scanning function code
-    // for direct `call rel32`/`jmp rel32` targets inside .text that are not
-    // already entries. Uses a sorted range map for O(log n) range lookup.
+    // Discover call/jmp targets that are missing from `.pdata` (leaf/thunk code
+    // the MSVC linker emits without exception data). Decode each KNOWN function
+    // body with iced (correct instruction boundaries), collect direct targets,
+    // add them, and iterate to a fixpoint. This is robust where a linear .text
+    // sweep desyncs on embedded data.
     {
+        // Sorted pdata map: start -> end (for the initial body bound).
+        let mut pd: Vec<(u32, u32)> = pe.pdata_functions.clone();
+        pd.sort_by_key(|r| r.0);
         let text_sec = pe.sections.iter().find(|s| s.name == ".text");
-        if let Some(ts) = text_sec {
-            let (tva, tend) = (ts.virtual_address, ts.end_rva());
-            // Sorted (start, end) ranges from .pdata for fast lookup.
-            let mut ranges: Vec<(u32, u32)> = pe.pdata_functions.clone();
-            ranges.sort_by_key(|r| r.0);
-            let starts: Vec<u32> = ranges.iter().map(|r| r.0).collect();
-            let range_of = |rva: u32| -> Option<(u32, u32)> {
-                match starts.binary_search(&rva) {
-                    Ok(i) => Some(ranges[i]),
-                    Err(i) => {
-                        if i > 0 && ranges[i - 1].0 <= rva && rva < ranges[i - 1].1 {
-                            Some(ranges[i - 1])
-                        } else {
-                            None
+        let (tva, tend) = text_sec.map(|s| (s.virtual_address, s.end_rva())).unwrap_or((0, pe.size_of_image));
+        for _round in 0..6 {
+            let mut added = 0usize;
+            let snapshot: Vec<u32> = entries.iter().cloned().collect();
+            for &start in &snapshot {
+                // Body end: pdata end if known, else the next entry (capped).
+                let pd_end = pd.binary_search_by_key(&start, |r| r.0).ok().map(|i| pd[i].1);
+                let next = entries.range((start + 1)..).next().copied().unwrap_or(tend);
+                let end = pd_end.unwrap_or(next).min(next).min(tend);
+                if end <= start { continue; }
+                let off = match PeImage::rva_to_off(&pe.sections, start) { Some(o) => o, None => continue };
+                let len = (end - start) as usize;
+                if len == 0 || pe.bytes.len() < off + len { continue; }
+                let code = &pe.bytes[off..off + len];
+                let mut dec = Decoder::with_ip(64, code, pe.image_base + start as u64, DecoderOptions::NONE);
+                let mut insn = Instruction::default();
+                while dec.can_decode() {
+                    dec.decode_out(&mut insn);
+                    if insn.is_invalid() { dec.set_position(dec.position() - insn.len() + 1); continue; }
+                    if insn.op0_kind() == OpKind::NearBranch64
+                        && matches!(insn.mnemonic(), iced_x86::Mnemonic::Call | iced_x86::Mnemonic::Jmp)
+                    {
+                        let t = insn.near_branch64().wrapping_sub(pe.image_base);
+                        if t < 0xffff_ffff {
+                            let t = t as u32;
+                            if t >= tva && t < tend && entries.insert(t) { added += 1; }
                         }
                     }
                 }
-            };
-            for _round in 0..4 {
-                let mut added = 0usize;
-                let snapshot: Vec<u32> = entries.iter().cloned().collect();
-                for &start in &snapshot {
-                    let end = range_of(start).map(|(_, e)| e).unwrap_or(start + 0x2000).min(tend);
-                    let off = match PeImage::rva_to_off(&pe.sections, start) { Some(o) => o, None => continue };
-                    let len = (end.saturating_sub(start)) as usize;
-                    if len == 0 || pe.bytes.len() < off + len { continue; }
-                    let code = &pe.bytes[off..off + len];
-                    let mut i = 0usize;
-                    while i + 5 <= code.len() {
-                        let op = code[i];
-                        if op == 0xE8 || op == 0xE9 {
-                            let rel = i32::from_le_bytes([code[i+1], code[i+2], code[i+3], code[i+4]]);
-                            let target = (start as i64 + i as i64 + 5 + rel as i64) as i64;
-                            if target >= tva as i64 && target < tend as i64 {
-                                let t = target as u32;
-                                // Only add if it is not inside an existing range.
-                                if range_of(t).is_none() && entries.insert(t) { added += 1; }
-                            }
-                            i += 5;
-                        } else {
-                            i += 1;
-                        }
-                    }
-                }
-                eprintln!("[discover] round: +{added} entries (total {})", entries.len());
-                if added == 0 { break; }
             }
+            eprintln!("[discover] round +{added} (total {})", entries.len());
+            if added == 0 { break; }
         }
     }
 
