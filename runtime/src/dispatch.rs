@@ -592,6 +592,23 @@ pub fn format_trace(c: &GowCpu) -> String {
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn gow_enter(cpu: *mut GowCpu, frame: u64, level: u64) {
+    // x86 ENTER: push rbp; rbp = rsp; (optionally copy level-1 frames); rsp -= frame.
+    let c = &mut *cpu;
+    gow_push64(cpu, c.gpr.rbp);
+    let sp = c.gpr.rsp;
+    if level > 0 {
+        for _ in 1..level {
+            c.gpr.rbp = c.gpr.rbp.wrapping_sub(8);
+            gow_push64(cpu, gow_load(cpu, c.gpr.rbp, 8));
+        }
+        gow_push64(cpu, sp);
+    }
+    c.gpr.rbp = sp;
+    c.gpr.rsp = c.gpr.rsp.wrapping_sub(frame);
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn gow_trace_enter(cpu: *mut GowCpu, rva: u32) {
     let c = &mut *cpu;
     let i = (c.call_trace_pos & 31) as usize;
