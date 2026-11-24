@@ -1,0 +1,24 @@
+diff --git a/src/d3d11/d3d11.sym b/src/d3d11/d3d11.sym
+index 91c8598..a137c20 100644
+--- a/src/d3d11/d3d11.sym
++++ b/src/d3d11/d3d11.sym
+@@ -4,6 +4,7 @@
+     D3D11CreateDevice;
+     D3D11CreateDeviceAndSwapChain;
+     D3D11On12CreateDevice;
++    dxvk_android_set_window;
+ 
+   local:
+     *;
+diff --git a/src/dxgi/dxgi.sym b/src/dxgi/dxgi.sym
+index d527d64..0f2fa5e 100644
+--- a/src/dxgi/dxgi.sym
++++ b/src/dxgi/dxgi.sym
+@@ -5,6 +5,7 @@
+     CreateDXGIFactory;
+     DXGIDeclareAdapterRemovalSupport;
+     DXGIGetDebugInterface1;
++    dxvk_android_set_window;
+ 
+   local:
+     *;

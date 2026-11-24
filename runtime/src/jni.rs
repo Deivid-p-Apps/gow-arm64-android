@@ -127,16 +127,24 @@ pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeLoadDriver(
         }
     }
     // Otherwise look for a driver inside the first .zip/.adpkg in the folder.
-    if let Ok(rd) = std::fs::read_dir(&ddir) {
-        for e in rd.flatten() {
-            let path = e.path();
-            let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
-            if ext == "zip" || ext == "adpkg" {
-                if let Some(so) = extract_driver_from_zip(&path, &pdir) {
-                    return stage_and_load_driver(&so, &pdir);
+    match std::fs::read_dir(&ddir) {
+        Ok(rd) => {
+            let mut seen = 0;
+            for e in rd.flatten() {
+                seen += 1;
+                let path = e.path();
+                let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+                crate::glog!("[gow.driver] entry {} ext={ext}", path.display());
+                if ext == "zip" || ext == "adpkg" {
+                    match extract_driver_from_zip(&path, &pdir) {
+                        Some(so) => return stage_and_load_driver(&so, &pdir),
+                        None => crate::glog!("[gow.driver] no .so inside {}", path.display()),
+                    }
                 }
             }
+            crate::glog!("[gow.driver] scanned {seen} entries, none usable");
         }
+        Err(e) => crate::glog!("[gow.driver] cannot read {ddir}: {e}"),
     }
     crate::glog!("[gow.driver] no driver package found; using system Vulkan");
     -1

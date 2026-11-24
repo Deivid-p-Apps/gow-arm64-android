@@ -1,0 +1,56 @@
+diff --git a/meson.build b/meson.build
+index 4964301..323840f 100644
+--- a/meson.build
++++ b/meson.build
+@@ -10,10 +10,6 @@ cc = meson.get_compiler('c')
+ dxvk_is_msvc = cpp.get_argument_syntax() == 'msvc'
+ 
+ compiler_args = [
+-  '-msse',
+-  '-msse2',
+-  '-msse3',
+-  '-mfpmath=sse',
+   '-Wimplicit-fallthrough',
+   # gcc
+   '-Wno-missing-field-initializers',
+@@ -28,6 +24,12 @@ compiler_args = [
+   '-Wno-missing-braces',
+ ]
+ 
++# SSE is x86-only; on other targets (aarch64/Android) these are rejected by the
++# compiler and would otherwise be filtered out by get_supported_arguments().
++if cpu_family == 'x86' or cpu_family == 'x86_64'
++  compiler_args += ['-msse', '-msse2', '-msse3', '-mfpmath=sse']
++endif
++
+ link_args = []
+ 
+ if get_option('build_id')
+@@ -138,7 +140,13 @@ else
+     endif
+     dxvk_version += [ padded ]
+   endforeach
+-  dxvk_so_version = {'version': dxvk_abi_version + '.' + dxvk_version[0] + dxvk_version[1] + dxvk_version[2]}
++  if platform == 'android'
++    # Android packages only `lib<name>.so`; a versioned SONAME
++    # (libdxvk_dxgi.so.0) cannot be loaded from an APK. Emit unversioned .so.
++    dxvk_so_version = {}
++  else
++    dxvk_so_version = {'version': dxvk_abi_version + '.' + dxvk_version[0] + dxvk_version[1] + dxvk_version[2]}
++  endif
+ 
+   wrc           = find_program('touch')
+   wrc_generator = generator(wrc, output : [ '@BASENAME@_ignored.h' ], arguments : [ '@OUTPUT@' ] )
+@@ -161,7 +169,11 @@ else
+   if lib_glfw.found()
+     compiler_args += ['-DDXVK_WSI_GLFW']
+   endif
+-  if (not lib_sdl3.found() and not lib_sdl2.found() and not lib_glfw.found())
++  if platform == 'android'
++    # Android presents directly through VK_KHR_android_surface with the
++    # ANativeWindow the host hands over (see src/wsi/android/), so no SDL/GLFW.
++    compiler_args += ['-DDXVK_WSI_ANDROID']
++  elif (not lib_sdl3.found() and not lib_sdl2.found() and not lib_glfw.found())
+     error('SDL3, SDL2, or GLFW are required to build dxvk-native')
+   endif
+   
