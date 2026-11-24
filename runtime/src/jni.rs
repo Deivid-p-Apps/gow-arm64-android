@@ -499,15 +499,11 @@ pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeSurfaceCreated(
     // If they are not loaded yet, `start_graphics_backend` does it after dlopen.
     graphics_bridge().set_android_window(android_win);
 
-    // Bring up Vulkan on the window (Turnip driver via libadrenotools when
-    // present). Failure here is reported, never hidden.
-    match crate::vk::VkContext::new(android_win, "GoW arm64") {
-        Some(ctx) => unsafe { VK = Some(ctx); },
-        None => crate::glog!("[gow] Vulkan init failed (driver missing?)"),
-    }
+    // NOTE: do NOT create our own VkInstance here. DXVK (through the
+    // libadrenotools loader) creates the instance itself and owns the swapchain;
+    // making a second instance on this Android view crashed (fault addr 0).
+    crate::glog!("[gow] window pushed; DXVK owns the Vulkan instance");
 }
-
-static mut VK: Option<crate::vk::VkContext> = None;
 
 #[no_mangle]
 pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeSurfaceChanged(
