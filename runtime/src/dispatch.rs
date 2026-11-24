@@ -350,13 +350,13 @@ pub unsafe extern "C" fn gow_store_xmm(cpu: *mut GowCpu, reg: u32, addr: u64) {
 #[inline]
 pub fn plausible_mem(addr: u64, len: u64) -> bool {
     if addr < 0x1000 { return false; }
-    let end = match addr.checked_add(len) { Some(e) => e, None => return false };
-    // Android user addresses span up to ~0x7fff_ffff_ffff on arm64 (and stack
-    // mappings can sit around 0xb400...). Only reject the truly impossible:
-    // kernel range (> 0xffff_0000_0000), the null page, and 0xffffffff...
-    if addr >= 0xffff_0000_0000_0000 { return false; }
-    if addr > 0x0000_00ff_ffff_ffff_ffff { return false; }
-    let _ = end;
+    if addr.checked_add(len).is_none() { return false; }
+    // Reject only the wild/negative canonical range: top 16 bits all ones
+    // (0xffff_xxxx...) is the kernel/-1 range. Everything else (including the
+    // Android 0xb400_... tagged stack/heap addresses and the guest image at
+    // 0x1_40xx_xxxx) is allowed.
+    let top = addr >> 48;
+    if top == 0xffff { return false; }
     true
 }
 
@@ -1348,7 +1348,9 @@ pub unsafe extern "C" fn gow_enter(cpu: *mut GowCpu, frame: u64, level: u64) {
 /// Central dispatch loop. Runs until next_rva == STOP_RVA.
 #[no_mangle]
 pub unsafe extern "C" fn gow_run(cpu: *mut GowCpu, entry_rva: u32) {
-    crate::crashlog::install();
+    // NOTE: don't install a SIGSEGV handler here — ART wraps sigaction and
+    // re-raising SIG_DFL kills the process mid-run. Diagnostics come from the
+    // gow.badstore/badload validators instead.
     crate::crashlog::set_current_cpu(cpu);
     let c = &mut *cpu;
     let map: HashMap<u32, GowFunc> = registry().iter().cloned().collect();
