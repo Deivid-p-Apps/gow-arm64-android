@@ -179,7 +179,10 @@ fn stage_and_load_driver(src: &str, priv_dir: &str) -> c_int {
     let h = unsafe { dlopen(cpath.as_ptr(), RTLD_NOW | RTLD_LOCAL) };
     if h.is_null() {
         let err = unsafe { dlerror() };
-        crate::glog!("[gow.driver] dlopen {dst} failed: {:?}", err);
+        let msg = if err.is_null() { "unknown".to_string() } else {
+            unsafe { std::ffi::CStr::from_ptr(err).to_string_lossy().into_owned() }
+        };
+        crate::glog!("[gow.driver] dlopen {dst} failed: {msg}");
         return -2;
     }
     crate::glog!("[gow.driver] Turnip driver loaded from {dst}");
