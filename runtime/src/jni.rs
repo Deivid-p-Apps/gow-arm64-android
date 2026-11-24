@@ -171,9 +171,25 @@ pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeLoadDriver(
 
 fn stage_and_load_driver(src: &str, priv_dir: &str) -> c_int {
     let dst = format!("{priv_dir}/libvulkan_freedreno.so");
-    if let Err(e) = std::fs::copy(src, &dst) {
-        crate::glog!("[gow.driver] copy failed: {e}");
-        return -1;
+    // Don't copy a file onto itself (fs::copy truncates the destination first,
+    // which would leave a 0-byte file and make dlopen fail).
+    let dst_path = std::path::Path::new(&dst);
+    let src_path = std::path::Path::new(src);
+    let same = src_path == dst_path;
+    if !same {
+        if let Err(e) = std::fs::copy(src, &dst) {
+            crate::glog!("[gow.driver] copy {src} -> {dst} failed: {e}");
+            return -1;
+        }
+    }
+    // Verify the file is non-empty before dlopen (a 0-byte .so is unusable).
+    match std::fs::metadata(&dst) {
+        Ok(m) if m.len() == 0 => {
+            crate::glog!("[gow.driver] {dst} is 0 bytes; aborting");
+            return -1;
+        }
+        Err(e) => { crate::glog!("[gow.driver] stat {dst} failed: {e}"); return -1; }
+        _ => {}
     }
     let cpath = CString::new(dst.clone()).unwrap();
     let h = unsafe { dlopen(cpath.as_ptr(), RTLD_NOW | RTLD_LOCAL) };
