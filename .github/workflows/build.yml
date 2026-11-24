@@ -66,14 +66,18 @@ jobs:
           cargo build -p gow-runtime --release --target aarch64-linux-android
       - name: Fetch generated shards (private release asset)
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p generated
           TAG="${{ vars.SHARDS_ASSET }}"
           if [ -z "$TAG" ]; then echo "no SHARDS_ASSET"; exit 1; fi
+          set -x
+          gh release view "$TAG" -R "${{ github.repository }}" --json assets || true
           gh release download "$TAG" -R "${{ github.repository }}" \
             -p 'shards.tar.gz' -O shards.tar.gz
+          ls -la shards.tar.gz
           tar xzf shards.tar.gz
+          ls generated | head
       - name: Compile shards and link libgow_game.so
         run: |
           NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
