@@ -69,6 +69,9 @@ impl ImportResolver {
         let a2 = c.gpr.r8;
         let a3 = c.gpr.r9;
         let arg = |n: u64| -> u64 { (c.gpr.rsp + 0x28 + n * 8) as *const u64 as u64 };
+        // 5th/6th args live on the shadow stack (after the 4 register args).
+        let a4 = *(arg(0) as *const u64);
+        let a5 = *(arg(1) as *const u64);
 
         let dll_l = dll.to_ascii_lowercase();
         let handled = match (dll_l.as_str(), func.as_str()) {
@@ -129,6 +132,100 @@ impl ImportResolver {
             ("kernel32.dll", "IsDebuggerPresent") => { c.gpr.rax = 0; true }
             ("kernel32.dll", "DebugBreak") | ("kernel32.dll", "RaiseException") => { true }
             ("kernel32.dll", "SetLastError") => { true }
+            // --- Windows version compatibility (the game checks it at startup;
+            // returning "not supported" makes it show an error and exit). ---
+            ("kernel32.dll", "VerifyVersionInfoW") | ("kernel32.dll", "VerifyVersionInfoA") => {
+                // Claim the requested condition is satisfied: the game only wants
+                // "Windows 7 or newer". We report success without parsing the mask.
+                c.gpr.rax = 1;
+                true
+            }
+            ("kernel32.dll", "VerSetConditionMask") => {
+                // (condition_mask, type_mask, condition) -> new mask
+                let out = a0 | (a1 & 0xff) * 0 | a1; // conservative combine
+                c.gpr.rax = if a0 != 0 { a0 } else { out };
+                true
+            }
+            ("kernel32.dll", "GetVersionExW") | ("kernel32.dll", "GetVersionExA") => {
+                // OSVERSIONINFOEX: dwOSVersionInfoSize@0, major@4, minor@8, build@0xC,
+                // platform@0x10. Report Windows 10 (10.0.19041).
+                if a0 != 0 {
+                    let p = a0 as *mut u8;
+                    *(p as *mut u32).add(1) = 10;
+                    *(p as *mut u32).add(2) = 0;
+                    *(p as *mut u32).add(3) = 19041;
+                    *(p as *mut u32).add(4) = 2; // VER_PLATFORM_WIN32_NT
+                }
+                c.gpr.rax = 1;
+                true
+            }
+            // --- Unicode / locale (startup logging + paths) ---
+            ("kernel32.dll", "MultiByteToWideChar") => {
+                // (cp, flags, src, src_len, dst, dst_len) -> wide chars written
+                let (src, src_len, dst, dst_len) = (a2, a3 as i64, a4, a5 as i64);
+                let n = if src_len < 0 { read_cstr(src, false).len() } else { src_len as usize };
+                let out = if dst_len < 0 { n } else { n.min(dst_len as usize) };
+                for i in 0..out {
+                    let ch = *(src as *const u8).add(i) as u16;
+                    if dst != 0 { *(dst as *mut u16).add(i) = ch; }
+                }
+                c.gpr.rax = out as u64;
+                true
+            }
+            ("kernel32.dll", "WideCharToMultiByte") => {
+                // (cp, flags, src, src_len, dst, dst_len, def, used)
+                let (src, src_len, dst, dst_len) = (a2, a3 as i64, a4, a5 as i64);
+                let n = if src_len < 0 {
+                    let mut n = 0usize;
+                    while *(src as *const u16).add(n) != 0 { n += 1; }
+                    n
+                } else { src_len as usize };
+                let out = if dst_len < 0 { n } else { n.min(dst_len as usize) };
+                for i in 0..out {
+                    let ch = *(src as *const u16).add(i) as u8;
+                    if dst != 0 { *(dst as *mut u8).add(i) = ch; }
+                }
+                c.gpr.rax = out as u64;
+                true
+            }
+            ("kernel32.dll", "GetUserDefaultLocaleName") => {
+                // Write "en-US" as UTF-16; return length incl. NUL.
+                let s: Vec<u16> = "en-US\0".encode_utf16().collect();
+                if a0 != 0 {
+                    for (i, ch) in s.iter().enumerate() { *(a0 as *mut u16).add(i) = *ch; }
+                }
+                c.gpr.rax = s.len() as u64;
+                true
+            }
+            ("kernel32.dll", "GetSystemDefaultLocaleName") | ("kernel32.dll", "GetUserDefaultUILanguage") => {
+                c.gpr.rax = 0x0409; // en-US
+                true
+            }
+            ("kernel32.dll", "RtlCaptureContext") => {
+                // Fill a CONTEXT with the current guest state (used by SEH/unwind
+                // probes). Zero it and set Rip to the current guest rip.
+                if a0 != 0 {
+                    std::ptr::write_bytes(a0 as *mut u8, 0, 0x4d0);
+                    *((a0 as *mut u8).add(0xf8) as *mut u64) = c.rip; // Rip
+                }
+                true
+            }
+            ("kernel32.dll", "RtlLookupFunctionEntry") => {
+                // No unwind data on the host: report "not found" (0), which callers
+                // treat as a leaf function.
+                if a2 != 0 { *(a2 as *mut u64) = 0; }
+                c.gpr.rax = 0;
+                true
+            }
+            ("kernel32.dll", "RtlVirtualUnwind") => { c.gpr.rax = 0; true }
+            ("user32.dll", "MessageBoxA") | ("user32.dll", "MessageBoxW") => {
+                // Never block the port on a modal dialog: log the text and return IDOK.
+                let text = read_cstr(a1, dll_l.ends_with('w'));
+                let cap = read_cstr(a2, dll_l.ends_with('w'));
+                crate::glog!("[gow.msgbox] {cap}: {text}");
+                c.gpr.rax = 1; // IDOK
+                true
+            }
             ("kernel32.dll", "GetProcessHeap") => { c.gpr.rax = 0xdead0001; true }
             ("kernel32.dll", "HeapCreate") => { c.gpr.rax = 0xdead0002; true }
             ("kernel32.dll", "HeapDestroy") => { c.gpr.rax = 1; true }

@@ -60,6 +60,39 @@ pub unsafe fn call(cpu: *mut GowCpu, func: &str) -> bool {
             if eq { 0 } else if a < b { -1i64 as u64 } else { 1 }
         }
         "strcpy" => { unsafe_copy_cstr(a0, a1); a0 }
+        "strcpy_s" => {
+            // (dest, destsz, src): copy with bounds, NUL-terminate.
+            let n = a2 as usize;
+            let src = cstr(a1);
+            let k = src.len().min(n.saturating_sub(1));
+            std::ptr::copy_nonoverlapping(src.as_ptr(), a0 as *mut u8, k);
+            *(a0 as *mut u8).add(k) = 0;
+            0
+        }
+        "strncpy_s" => {
+            // (dest, destsz, src, count)
+            let destsz = a1 as usize;
+            let count = a3 as usize;
+            let src = cstr(a2);
+            let k = count.min(src.len()).min(destsz.saturating_sub(1));
+            std::ptr::copy_nonoverlapping(src.as_ptr(), a0 as *mut u8, k);
+            *(a0 as *mut u8).add(k) = 0;
+            0
+        }
+        "memcpy_s" => {
+            let (dest, destsz, src, count) = (a0, a1 as usize, a2, a3 as usize);
+            if count <= destsz { std::ptr::copy_nonoverlapping(src as *const u8, dest as *mut u8, count); }
+            0
+        }
+        "wcsncpy_s" | "wcscpy_s" | "wcsncat_s" | "wcscat_s" | "strncat_s" | "strcat_s" => 0,
+        "__stdio_common_vfprintf" | "__stdio_common_vsprintf" | "__stdio_common_vsnprintf"
+        | "__stdio_common_vswprintf" | "__stdio_common_vfscanf" | "__stdio_common_vsscanf"
+        | "__stdio_common_vsprintf_s" | "__stdio_common_vswprintf_s" => {
+            // Formatted output to a FILE/buffer: we don't implement the full
+            // printf engine. Return the number of chars "written" as 0 so the
+            // caller does not loop; the actual log path is unused at boot.
+            0
+        }
         "strncpy" => { unsafe_copy_cstr_n(a0, a1, a2 as usize); a0 }
         "strlen" => cstr(a0).len() as u64,
         "strchr" => {
