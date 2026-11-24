@@ -556,7 +556,9 @@ impl ImportResolver {
                 // vtables it returns are what the game calls afterwards.
                 match self.graphics.resolve(&dll_l, &func) {
                     Some(addr) => {
+                        crate::glog!("[gow.gfx] call {dll}!{func}");
                         let r = crate::graphics::GraphicsBridge::call_addr_raw(addr, cpu);
+                        crate::glog!("[gow.gfx] {func} -> 0x{r:x}");
                         c.gpr.rax = r;
                         true
                     }
