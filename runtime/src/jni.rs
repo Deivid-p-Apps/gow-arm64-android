@@ -60,6 +60,11 @@ pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeRun(
     let mut cpu = GowCpu::new(image_base, image_size as usize);
     // The window/graphics/audio layers are started here in later milestones.
     unsafe { crate::dispatch::gow_run(cpu.as_mut(), entry_rva) };
+    // The background sampler keeps reading the first CPU after the entry
+    // returns; keep that one alive instead of freeing memory it reads.
+    if crate::dispatch::is_sampler_cpu(cpu.as_mut() as *const GowCpu) {
+        std::mem::forget(cpu);
+    }
     0
 }
 
@@ -479,6 +484,12 @@ fn run_game_library(path: CString, pdir: &str, gdir: &str, image_base: u64, imag
     crate::glog!("[gow] entry=0x{entry_rva:x} running");
     unsafe { crate::dispatch::gow_run(cpu.as_mut() as *mut GowCpu, entry_rva) };
     crate::glog!("[gow] returned from entry (unimpl hits reported above)");
+    // The background sampler keeps reading the first CPU every 2 s after the
+    // entry point returns; keep that one alive (leak, one per process — the
+    // 16 MiB guest stack + TEB) instead of freeing memory it still reads.
+    if crate::dispatch::is_sampler_cpu(cpu.as_mut() as *const GowCpu) {
+        std::mem::forget(cpu);
+    }
     0
 }
 
