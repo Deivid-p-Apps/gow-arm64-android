@@ -296,10 +296,14 @@ pub fn lift(pe: &PeImage, out_dir: &std::path::Path) -> Result<LiftOutput> {
     // For a function start, its code ends at its .pdata end if known, else at the
     // next known entry (capped) — never a blind 64 KB.
     let func_end = |start: u32| -> u32 {
-        // .pdata end is often too short (code continues past it). The next known
-        // entry is the real bound; fall back to +0x4000 only for the last one.
-        let next = entries.range((start + 1)..).next().copied().unwrap_or((start + 0x4000).min(text_end));
-        next.min(text_end).max(start + 1)
+        // Use the LARGER of the .pdata end and the next known entry: .pdata can
+        // both underestimate (code past its range) and overlap (a nested entry
+        // inside the range). Taking the max covers both; jump targets beyond it
+        // are handled as tail calls/trampolines.
+        let pd_end = pdata_sorted.binary_search_by_key(&start, |r| r.0).ok().map(|i| pdata_sorted[i].1);
+        let next = entries.range((start + 1)..).next().copied().unwrap_or(text_end);
+        let bound = match pd_end { Some(e) => e.max(next), None => next };
+        bound.min(text_end).max(start + 1)
     };
 
     let mut shard_protos = String::new();
