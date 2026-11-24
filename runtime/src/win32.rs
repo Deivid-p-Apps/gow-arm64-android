@@ -114,6 +114,21 @@ impl ImportResolver {
             | ("kernel32.dll", "DeleteCriticalSection") => true,
             ("kernel32.dll", "TlsAlloc") => { c.gpr.rax = tls_alloc(); true }
             ("kernel32.dll", "GetLastError") => { c.gpr.rax = 0; true }
+            ("kernel32.dll", "GetStartupInfoA") | ("kernel32.dll", "GetStartupInfoW") => {
+                // Fill STARTUPINFO (zeroed is valid); STARTF_USESHOWWINDOW not set.
+                if a0 != 0 {
+                    let n = if func.ends_with('W') { 104 } else { 68 };
+                    std::ptr::write_bytes(a0 as *mut u8, 0, n);
+                    // cb = sizeof(STARTUPINFO)
+                    *(a0 as *mut u32) = n as u32;
+                }
+                true
+            }
+            ("kernel32.dll", "GetStdHandle") => { c.gpr.rax = 0xffff_fff4; true } // INVALID_HANDLE_VALUE-ish
+            ("kernel32.dll", "SetConsoleCtrlHandler") => { c.gpr.rax = 1; true }
+            ("kernel32.dll", "IsDebuggerPresent") => { c.gpr.rax = 0; true }
+            ("kernel32.dll", "DebugBreak") | ("kernel32.dll", "RaiseException") => { true }
+            ("kernel32.dll", "SetLastError") => { true }
             ("kernel32.dll", "GetProcessHeap") => { c.gpr.rax = 0xdead0001; true }
             ("kernel32.dll", "HeapCreate") => { c.gpr.rax = 0xdead0002; true }
             ("kernel32.dll", "HeapDestroy") => { c.gpr.rax = 1; true }
