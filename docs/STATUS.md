@@ -23,12 +23,18 @@ Motorola Edge 30 Fusion (`tundra`), SM8350 (Snapdragon 888+), Adreno 725 (Turnip
 ### O que funciona (verificável)
 - [x] `tools/pe_probe.py`: análise de PE
 - [x] `recompiler`: parser PE32+ (sections/IAT/exports/.pdata/TLS)
-- [x] `recompiler`: descoberta de funções (`.pdata` + entry + TLS callbacks)
+- [x] `recompiler`: descoberta de funções (`.pdata` + entry + TLS callbacks +
+      varredura de `call`/`jmp` diretos em `.text`) → **53.787 funções**
 - [x] `recompiler`: lifter x86-64 -> C (iced-x86)
 - [x] **Modelo de fluxo de controle correto: chamadas C diretas + `goto` local**
       (provado end-to-end: um programa sintético de 2 funções roda e dá `rax=15`)
-- [x] **Lift completo: 51.869 funções, 2.754.847 instruções; cobertura ~99,96%**
-      (1.234 traps restantes). Gera 35 shards `gow_shard_NNN.c` + `gow_table.c` + `gow_protos.h`
+- [x] **Lift completo: 53.787 funções, 2.960.366 instruções; cobertura 99,99%**
+      (288 traps). 36 shards `gow_shard_NNN.c` + `gow_table.c` + `gow_protos.h`
+- [x] **Execução real no dispositivo**: o aparelho carrega `libgow_game.so`,
+      registra as 53.787 funções, instala o resolver de imports (579 slots),
+      mapeia a imagem do PE em `0x140000000` (mmap MAP_FIXED) e **entra no entry
+      point `0x3ec680`**, executando código recompilado de verdade
+      (backtrace real: `entry f_3ec680 → f_3ed174 → gow_load`)
 - [x] **C gerado compila de verdade** com `clang -O2` (shards testados, 0 erros)
 - [x] `runtime`: dispatch loop, arquivo de registradores, memória guest no image
       base original, pilha guest (8 MB), flags exatas, shifts, SSE/SSE2/AVX subset,
