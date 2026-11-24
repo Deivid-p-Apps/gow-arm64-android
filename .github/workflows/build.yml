@@ -74,7 +74,7 @@ jobs:
           set -x
           gh release view "$TAG" -R "${{ github.repository }}" --json assets || true
           gh release download "$TAG" -R "${{ github.repository }}" \
-            -p 'shards.tar.gz' -O shards.tar.gz
+            -p 'shards.tar.gz' -O shards.tar.gz --clobber
           ls -la shards.tar.gz
           tar xzf shards.tar.gz
           ls generated | head
