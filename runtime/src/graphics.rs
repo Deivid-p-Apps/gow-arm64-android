@@ -120,6 +120,8 @@ impl GraphicsBridge {
         // DXVK reads this inside wsi::init() and throws if it is unset/unmatched.
         // Must be set before the first D3D11/DXGI call.
         self.set_wsi_driver("Android");
+        // On-screen HUD with FPS and frame times (DXVK reads DXVK_HUD at init).
+        self.set_hud("fps,frametimes,gpuload,devinfo");
 
         let dxgi = format!("{native_lib_dir}/libdxvk_dxgi.so");
         let d3d11 = format!("{native_lib_dir}/libdxvk_d3d11.so");
@@ -146,6 +148,15 @@ impl GraphicsBridge {
         if std::env::var_os("DXVK_WSI_DRIVER").is_none() {
             std::env::set_var("DXVK_WSI_DRIVER", driver);
             crate::glog!("[gow.gfx] DXVK_WSI_DRIVER={driver}");
+        }
+    }
+
+    /// Configure the DXVK HUD (on-screen overlay). `spec` follows DXVK's syntax,
+    /// e.g. `"fps,frametimes,gpuload,devinfo"`. Set before DXVK loads.
+    pub fn set_hud(&self, spec: &str) {
+        if std::env::var_os("DXVK_HUD").is_none() {
+            std::env::set_var("DXVK_HUD", spec);
+            crate::glog!("[gow.gfx] DXVK_HUD={spec}");
         }
     }
 

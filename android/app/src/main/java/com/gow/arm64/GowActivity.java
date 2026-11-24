@@ -2,9 +2,15 @@ package com.gow.arm64;
 
 import android.app.Activity;
 import android.os.Bundle;
+import android.view.InputDevice;
+import android.view.MotionEvent;
 import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.WindowManager;
+import android.widget.FrameLayout;
 import android.util.Log;
 import android.os.Environment;
 import android.Manifest;
@@ -13,9 +19,15 @@ import java.io.File;
 
 /**
  * Host activity. Presents a SurfaceView (the ANativeWindow the Vulkan swapchain
- * will bind to) and drives the native runtime. The game's own files are read at
- * runtime from /storage/emulated/0/god/; the recompiled game library is loaded
- * from the app's private files directory.
+ * will bind to) with the on-screen {@link GamepadOverlayView} layered on top,
+ * and drives the native runtime. The game's own files are read at runtime from
+ * /storage/emulated/0/god/; the recompiled game library is loaded from the
+ * app's private files directory.
+ *
+ * <p>Touch routing: the overlay is a non-focusable transparent view placed over
+ * the SurfaceView inside a {@link FrameLayout}. It only consumes touches that
+ * land on a control; any other touch falls through to the activity's own
+ * {@link #onTouchEvent}, which forwards it to the native touch layer.
  */
 public class GowActivity extends Activity implements SurfaceHolder.Callback {
     private static final String TAG = "GoW";
@@ -33,13 +45,41 @@ public class GowActivity extends Activity implements SurfaceHolder.Callback {
     private native void nativeTouch(int pointerId, float x, float y, boolean down);
 
     private SurfaceView surfaceView;
+    private GamepadOverlayView gamepad;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+
         surfaceView = new SurfaceView(this);
         surfaceView.getHolder().addCallback(this);
-        setContentView(surfaceView);
+
+        // The overlay drives runtime/src/input.rs through the existing
+        // nativeMotion / nativeKey entry points (gamepad axes + gamepad
+        // keycodes); touches that miss every control are forwarded to the game
+        // as normalized touch coordinates. See docs/GAMEPAD.md for the mapping.
+        gamepad = new GamepadOverlayView(this, new GamepadOverlayView.InputSink() {
+            @Override public void axis(int axis, float value) {
+                nativeMotion(axis, value);
+            }
+            @Override public void key(int source, int keyCode, boolean down) {
+                nativeKey(source, keyCode, down);
+            }
+            @Override public void gameTouch(int pointerId, float x, float y, boolean down) {
+                nativeTouch(pointerId, x, y, down);
+            }
+        });
+
+        // SurfaceView fills the frame; the overlay is drawn on top and lets
+        // non-control touches through to the game.
+        FrameLayout root = new FrameLayout(this);
+        root.setMotionEventSplittingEnabled(true);
+        root.addView(surfaceView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        root.addView(gamepad, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        setContentView(root);
 
         File godDir = new File("/storage/emulated/0/god");
         Log.i(TAG, "game dir exists: " + godDir.exists() + " " + godDir.getAbsolutePath());
@@ -92,33 +132,15 @@ public class GowActivity extends Activity implements SurfaceHolder.Callback {
 
     @Override
     public boolean onGenericMotionEvent(android.view.MotionEvent event) {
-        // Joystick axes.
-        for (int axis = android.view.MotionEvent.AXIS_X; axis <= android.view.MotionEvent.AXIS_RZ; axis++) {
-            nativeMotion(axis, event.getAxisValue(axis));
+        // Physical joystick axes only; the on-screen sticks do NOT come through
+        // here (they are fed straight to the input layer from the overlay).
+        if ((event.getSource() & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK
+                || (event.getSource() & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD) {
+            for (int axis = android.view.MotionEvent.AXIS_X; axis <= android.view.MotionEvent.AXIS_RZ; axis++) {
+                nativeMotion(axis, event.getAxisValue(axis));
+            }
+            return true;
         }
-        return true;
-    }
-
-    @Override
-    public boolean onTouchEvent(android.view.MotionEvent event) {
-        int action = event.getActionMasked();
-        int idx = event.getActionIndex();
-        int id = event.getPointerId(idx);
-        switch (action) {
-            case android.view.MotionEvent.ACTION_DOWN:
-            case android.view.MotionEvent.ACTION_POINTER_DOWN:
-                nativeTouch(id, event.getX(idx), event.getY(idx), true);
-                break;
-            case android.view.MotionEvent.ACTION_UP:
-            case android.view.MotionEvent.ACTION_POINTER_UP:
-                nativeTouch(id, event.getX(idx), event.getY(idx), false);
-                break;
-            case android.view.MotionEvent.ACTION_MOVE:
-                for (int i = 0; i < event.getPointerCount(); i++) {
-                    nativeTouch(event.getPointerId(i), event.getX(i), event.getY(i), true);
-                }
-                break;
-        }
-        return true;
+        return super.onGenericMotionEvent(event);
     }
 }
