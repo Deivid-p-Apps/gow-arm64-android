@@ -354,7 +354,7 @@ pub fn lift(pe: &PeImage, out_dir: &std::path::Path) -> Result<LiftOutput> {
             dec.decode_out(&mut insn);
             let rva = (insn.ip().wrapping_sub(image_base)) as u32;
             if insn.is_invalid() { dec.set_position(pos_before + 1); continue; }
-            writeln!(sc, "L_{rva:x}: ;")?;
+            writeln!(sc, "L_{rva:x}: ; cpu->rip = 0x{:x}ull;", image_base + rva as u64)?;
             insn_count += 1;
             let mut text = String::new();
             fmt.format(&insn, &mut text);

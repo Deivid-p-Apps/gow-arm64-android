@@ -289,7 +289,13 @@ pub unsafe extern "C" fn gow_test_cc(cpu: *mut GowCpu, cc: u32) -> u64 {
 // ---------------------------------------------------------------------------
 
 #[no_mangle]
-pub unsafe extern "C" fn gow_load(_cpu: *mut GowCpu, addr: u64, size: u32) -> u64 {
+pub unsafe extern "C" fn gow_load(cpu: *mut GowCpu, addr: u64, size: u32) -> u64 {
+    if !plausible_mem(addr, size as u64) {
+        let c = &*cpu;
+        crate::glog!("[gow.badload] load addr=0x{addr:x} size={size} rva=0x{:x} rsp=0x{:x} rbp=0x{:x} rcx=0x{:x} rax=0x{:x}",
+            c.rip.wrapping_sub(c.image_base), c.gpr.rsp, c.gpr.rbp, c.gpr.rcx, c.gpr.rax);
+        return 0;
+    }
     let p = addr as *const u8;
     match size {
         1 => *p as u64,
@@ -301,7 +307,13 @@ pub unsafe extern "C" fn gow_load(_cpu: *mut GowCpu, addr: u64, size: u32) -> u6
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn gow_store(_cpu: *mut GowCpu, addr: u64, v: u64, size: u32) {
+pub unsafe extern "C" fn gow_store(cpu: *mut GowCpu, addr: u64, v: u64, size: u32) {
+    if !plausible_mem(addr, size as u64) {
+        let c = &*cpu;
+        crate::glog!("[gow.badstore] store addr=0x{addr:x} size={size} rva=0x{:x} rsp=0x{:x} rbp=0x{:x} rdi=0x{:x} rsi=0x{:x} rcx=0x{:x} rax=0x{:x}",
+            c.rip.wrapping_sub(c.image_base), c.gpr.rsp, c.gpr.rbp, c.gpr.rdi, c.gpr.rsi, c.gpr.rcx, c.gpr.rax);
+        return;
+    }
     let p = addr as *mut u8;
     match size {
         1 => *p = v as u8,
