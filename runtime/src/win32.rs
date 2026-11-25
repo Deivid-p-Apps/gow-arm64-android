@@ -19,6 +19,17 @@
 //! Module policy (D014): LoadLibrary hands out
 //! pseudo-module handles and GetProcAddress serves hostcall thunks (DXVK Native
 //! for d3d11/dxgi/d3dcompiler), so games that resolve D3D11 dynamically work.
+//!
+//! Build #155 post-mortem (D018):
+//! - VirtualAlloc(arena_addr, size, MEM_COMMIT) ignored lpAddress and allocated
+//!   FRESH memory, so the engine's 8 GiB arena + a 128 MiB in-arena commit
+//!   produced a pointer OUTSIDE the arena → wild negative addresses → the
+//!   badstore cascade → SIGSEGV at 0x80. Commits inside a tracked reservation
+//!   now return the requested base, exactly like Windows.
+//! - Every guest pointer written through by a handler is validated with
+//!   `okp` (null page / kernel range / wrap-around rejected): the degraded
+//!   engine state passed pointers like 0x80 to out-parameters and killed the
+//!   host inside the runtime.
 
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
@@ -89,38 +100,60 @@ impl ImportResolver {
         let a3 = c.gpr.r9;
         let arg = |n: u64| -> u64 { (c.gpr.rsp + 0x28 + n * 8) as *const u64 as u64 };
         // 5th/6th args live on the shadow stack (after the 4 register args).
-        let a4 = *(arg(0) as *const u64);
-        let a5 = *(arg(1) as *const u64);
+        // Validate the guest stack slot before reading it: with a degraded
+        // engine state (build #155) the guest rsp could go wild and a raw
+        // read here killed the host.
+        let a4 = if crate::dispatch::plausible_mem(arg(0), 8) { *(arg(0) as *const u64) } else { 0 };
+        let a5 = if crate::dispatch::plausible_mem(arg(1), 8) { *(arg(1) as *const u64) } else { 0 };
 
         let dll_l = dll.to_ascii_lowercase();
         let handled = match (dll_l.as_str(), func) {
             ("kernel32.dll", "VirtualAlloc") => {
-                // Fresh zeroed pages, tracked so VirtualFree can release them
-                // (D013); reservations of 32 MiB+ are mmap'd lazily (D017), so
-                // the engine's multi-GiB boot arena no longer comes back NULL.
-                // lpAddress != 0 with dwSize == 0 is MEM_COMMIT over an
-                // existing reservation: the mapping is already RW, so the base
-                // itself is the answer (returning NULL here failed boot-time
-                // commits).
-                let p = if a1 != 0 {
-                    host_alloc_pages(a1 as usize)
-                } else if a0 != 0 && (heap_size_raw(a0 as *mut u8) != 0 || heap_block_containing(a0).is_some()) {
-                    a0 as *mut u8
-                } else {
-                    std::ptr::null_mut()
-                };
+                // VirtualAlloc(lpAddress, dwSize, flAllocationType, flProtect):
+                // lpAddress in RCX, dwSize in RDX. The old handler ignored
+                // lpAddress whenever dwSize != 0 — which is every real commit —
+                // so an in-arena MEM_COMMIT (engine reserved 8 GiB, then
+                // committed a 128 MiB piece) allocated FRESH memory instead of
+                // returning the arena address. The engine's memory manager then
+                // ran on pointers outside its arena → wild negative addresses →
+                // the badstore cascade and the SIGSEGV at 0x80 (build #155).
+                // Windows semantics: committing inside an existing reservation
+                // returns the requested base; the mapping is already RW.
+                let mut p: *mut u8 = std::ptr::null_mut();
+                if a0 != 0 {
+                    if heap_block_containing(a0).is_some() {
+                        p = a0 as *mut u8; // commit within a reservation: in place
+                    } else if a1 == 0 {
+                        p = a0 as *mut u8; // old quirk: marker commit with size 0
+                    }
+                }
+                if p.is_null() && a1 != 0 {
+                    if a0 != 0 {
+                        let n = MISSING.fetch_add(1, Ordering::Relaxed);
+                        if n < 32 {
+                            crate::glog!("[gow.heap] VirtualAlloc(0x{a0:x}, 0x{a1:x}) at untracked address -> fresh allocation");
+                        }
+                    }
+                    p = host_alloc_pages(a1 as usize);
+                }
                 c.gpr.rax = p as u64;
                 true
             }
             ("kernel32.dll", "VirtualFree") => {
-                // MEM_DECOMMIT (0x4000) / MEM_RELEASE (0x8000): give the block
-                // back. Only exact block bases are freed; interior/partial
-                // decommits are ignored (logged, deduped) instead of
-                // corrupting neighbours.
-                let freed = heap_free_raw(a0 as *mut u8);
-                if !freed && a0 != 0 {
-                    let n = MISSING.fetch_add(1, Ordering::Relaxed);
-                    if n < 32 { crate::glog!("[gow.heap] VirtualFree(0x{a0:x}) of untracked/interior address ignored"); }
+                // VirtualFree(lpAddress, dwSize, dwFreeType): type in R8.
+                // MEM_RELEASE (0x8000) frees the whole block (base required);
+                // MEM_DECOMMIT (0x4000) on a sub-range is a no-op success — the
+                // lazy pages simply stay untouched (Windows would decommit
+                // them; we never committed eagerly). The old code freed on ANY
+                // call type and logged every engine sub-range decommit as an
+                // error.
+                const MEM_DECOMMIT: u64 = 0x4000;
+                if a2 & MEM_DECOMMIT == 0 {
+                    let freed = heap_free_raw(a0 as *mut u8);
+                    if !freed && a0 != 0 {
+                        let n = MISSING.fetch_add(1, Ordering::Relaxed);
+                        if n < 32 { crate::glog!("[gow.heap] VirtualFree(0x{a0:x}) of untracked/interior address ignored"); }
+                    }
                 }
                 c.gpr.rax = 1;
                 true
@@ -155,7 +188,7 @@ impl ImportResolver {
                         if b.ends_with(".exe") { c.image_base } else { module_handle_for(&b) }
                     }
                 };
-                if a2 != 0 { *(a2 as *mut u64) = h; }
+                if okp(a2, 8) { *(a2 as *mut u64) = h; }
                 c.gpr.rax = if h != 0 { 1 } else { 0 };
                 true
             }
@@ -173,17 +206,17 @@ impl ImportResolver {
             }
             ("kernel32.dll", "GetCurrentProcessId") => { c.gpr.rax = std::process::id() as u64; true }
             ("kernel32.dll", "QueryPerformanceCounter") => {
-                if a0 != 0 { *(a0 as *mut u64) = qpc(); }
+                if okp(a0, 8) { *(a0 as *mut u64) = qpc(); }
                 c.gpr.rax = 1; true
             }
             ("kernel32.dll", "QueryPerformanceFrequency") => {
-                if a0 != 0 { *(a0 as *mut u64) = 1_000_000_000; }
+                if okp(a0, 8) { *(a0 as *mut u64) = 1_000_000_000; }
                 c.gpr.rax = 1; true
             }
             ("kernel32.dll", "Sleep") => { std::thread::sleep(std::time::Duration::from_millis(a0)); true }
             ("kernel32.dll", "GetTickCount") | ("kernel32.dll", "GetTickCount64") => { c.gpr.rax = qpc() / 1_000_000; true }
             ("kernel32.dll", "InitializeCriticalSection") | ("kernel32.dll", "InitializeCriticalSectionAndSpinCount") => {
-                if a0 != 0 { *(a0 as *mut u64) = 0; }
+                if okp(a0, 8) { *(a0 as *mut u64) = 0; }
                 true
             }
             ("kernel32.dll", "EnterCriticalSection") | ("kernel32.dll", "LeaveCriticalSection")
@@ -239,8 +272,8 @@ impl ImportResolver {
             ("kernel32.dll", "GetLastError") => { c.gpr.rax = 0; true }
             ("kernel32.dll", "GetStartupInfoA") | ("kernel32.dll", "GetStartupInfoW") => {
                 // Fill STARTUPINFO (zeroed is valid); STARTF_USESHOWWINDOW not set.
-                if a0 != 0 {
-                    let n = if func.ends_with('W') { 104 } else { 68 };
+                let n = if func.ends_with('W') { 104 } else { 68 };
+                if okp(a0, n as u64) {
                     std::ptr::write_bytes(a0 as *mut u8, 0, n);
                     // cb = sizeof(STARTUPINFO)
                     *(a0 as *mut u32) = n as u32;
@@ -254,7 +287,7 @@ impl ImportResolver {
             ("kernel32.dll", "SetLastError") => { true }
             ("kernel32.dll", "InitializeSListHead") => {
                 // SLIST_HEADER is 16 bytes; zero it.
-                if a0 != 0 { std::ptr::write_bytes(a0 as *mut u8, 0, 16); }
+                if okp(a0, 16) { std::ptr::write_bytes(a0 as *mut u8, 0, 16); }
                 true
             }
             ("kernel32.dll", "CreateSemaphoreA") | ("kernel32.dll", "CreateSemaphoreW")
@@ -264,7 +297,7 @@ impl ImportResolver {
                 true
             }
             ("kernel32.dll", "ReleaseSemaphore") => {
-                if a2 != 0 { *(a2 as *mut u32) = 0; }
+                if okp(a2, 4) { *(a2 as *mut u32) = 0; }
                 c.gpr.rax = 1;
                 true
             }
@@ -291,12 +324,12 @@ impl ImportResolver {
             ("kernel32.dll", "GetVersionExW") | ("kernel32.dll", "GetVersionExA") => {
                 // OSVERSIONINFOEX: dwOSVersionInfoSize@0, major@4, minor@8, build@0xC,
                 // platform@0x10. Report Windows 10 (10.0.19041).
-                if a0 != 0 {
-                    let p = a0 as *mut u8;
-                    *(p as *mut u32).add(1) = 10;
-                    *(p as *mut u32).add(2) = 0;
-                    *(p as *mut u32).add(3) = 19041;
-                    *(p as *mut u32).add(4) = 2; // VER_PLATFORM_WIN32_NT
+                if okp(a0, 0x18) {
+                    let p = a0 as *mut u32;
+                    *p.add(1) = 10;
+                    *p.add(2) = 0;
+                    *p.add(3) = 19041;
+                    *p.add(4) = 2; // VER_PLATFORM_WIN32_NT
                 }
                 c.gpr.rax = 1;
                 true
@@ -305,35 +338,45 @@ impl ImportResolver {
             ("kernel32.dll", "MultiByteToWideChar") => {
                 // (cp, flags, src, src_len, dst, dst_len) -> wide chars written
                 let (src, src_len, dst, dst_len) = (a2, a3 as i64, a4, a5 as i64);
-                let n = if src_len < 0 { read_cstr(src, false).len() } else { src_len as usize };
-                let out = if dst_len < 0 { n } else { n.min(dst_len as usize) };
-                for i in 0..out {
-                    let ch = *(src as *const u8).add(i) as u16;
-                    if dst != 0 { *(dst as *mut u16).add(i) = ch; }
+                if !okp(src, 1) {
+                    c.gpr.rax = 0;
+                } else {
+                    let n = if src_len < 0 { read_cstr(src, false).len() } else { src_len as usize };
+                    let out = if dst_len < 0 { n } else { n.min(dst_len as usize) };
+                    for i in 0..out {
+                        if !okp(src + i as u64, 1) { break; }
+                        let ch = *(src as *const u8).add(i) as u16;
+                        if okp(dst + i as u64 * 2, 2) { *(dst as *mut u16).add(i) = ch; }
+                    }
+                    c.gpr.rax = out as u64;
                 }
-                c.gpr.rax = out as u64;
                 true
             }
             ("kernel32.dll", "WideCharToMultiByte") => {
                 // (cp, flags, src, src_len, dst, dst_len, def, used)
                 let (src, src_len, dst, dst_len) = (a2, a3 as i64, a4, a5 as i64);
-                let n = if src_len < 0 {
-                    let mut n = 0usize;
-                    while *(src as *const u16).add(n) != 0 { n += 1; }
-                    n
-                } else { src_len as usize };
-                let out = if dst_len < 0 { n } else { n.min(dst_len as usize) };
-                for i in 0..out {
-                    let ch = *(src as *const u16).add(i) as u8;
-                    if dst != 0 { *(dst as *mut u8).add(i) = ch; }
+                if !okp(src, 2) {
+                    c.gpr.rax = 0;
+                } else {
+                    let n = if src_len < 0 {
+                        let mut n = 0usize;
+                        while n < 4096 && okp(src + n as u64 * 2, 2) && *(src as *const u16).add(n) != 0 { n += 1; }
+                        n
+                    } else { src_len as usize };
+                    let out = if dst_len < 0 { n } else { n.min(dst_len as usize) };
+                    for i in 0..out {
+                        if !okp(src + i as u64 * 2, 2) { break; }
+                        let ch = *(src as *const u16).add(i) as u8;
+                        if okp(dst + i as u64, 1) { *(dst as *mut u8).add(i) = ch; }
+                    }
+                    c.gpr.rax = out as u64;
                 }
-                c.gpr.rax = out as u64;
                 true
             }
             ("kernel32.dll", "GetUserDefaultLocaleName") => {
                 // Write "en-US" as UTF-16; return length incl. NUL.
                 let s: Vec<u16> = "en-US\0".encode_utf16().collect();
-                if a0 != 0 {
+                if okp(a0, 16) {
                     for (i, ch) in s.iter().enumerate() { *(a0 as *mut u16).add(i) = *ch; }
                 }
                 c.gpr.rax = s.len() as u64;
@@ -346,7 +389,7 @@ impl ImportResolver {
             ("kernel32.dll", "RtlCaptureContext") => {
                 // Fill a CONTEXT with the current guest state (used by SEH/unwind
                 // probes). Zero it and set Rip to the current guest rip.
-                if a0 != 0 {
+                if okp(a0, 0x4d0) {
                     std::ptr::write_bytes(a0 as *mut u8, 0, 0x4d0);
                     *((a0 as *mut u8).add(0xf8) as *mut u64) = c.rip; // Rip
                 }
@@ -355,7 +398,7 @@ impl ImportResolver {
             ("kernel32.dll", "RtlLookupFunctionEntry") => {
                 // No unwind data on the host: report "not found" (0), which callers
                 // treat as a leaf function.
-                if a2 != 0 { *(a2 as *mut u64) = 0; }
+                if okp(a2, 8) { *(a2 as *mut u64) = 0; }
                 c.gpr.rax = 0;
                 true
             }
@@ -403,7 +446,7 @@ impl ImportResolver {
                 // lpMinimumApplicationAddress@8, lpMaximumApplicationAddress@0x10,
                 // dwActiveProcessorMask@0x18, dwNumberOfProcessors@0x20,
                 // dwProcessorType@0x24, dwAllocationGranularity@0x28.
-                if a0 != 0 {
+                if okp(a0, 48) {
                     let p = a0 as *mut u32;
                     *p.add(0) = 9;                       // PROCESSOR_ARCHITECTURE_AMD64
                     *p.add(1) = 4096;                    // dwPageSize
@@ -421,10 +464,11 @@ impl ImportResolver {
                 true
             }
             ("kernel32.dll", "GetSystemTime") | ("kernel32.dll", "GetLocalTime") => {
-                fill_systemtime(a0); true
+                if okp(a0, 16) { fill_systemtime(a0); }
+                true
             }
             ("kernel32.dll", "GetSystemTimeAsFileTime") => {
-                if a0 != 0 { let ft = (qpc() / 100) + 116444736000000000; *(a0 as *mut u64) = ft; } true
+                if okp(a0, 8) { let ft = (qpc() / 100) + 116444736000000000; *(a0 as *mut u64) = ft; } true
             }
             ("kernel32.dll", "IsProcessorFeaturePresent") => { c.gpr.rax = 0; true }
             ("kernel32.dll", "GetDateFormatA") | ("kernel32.dll", "GetTimeFormatA")
@@ -443,19 +487,21 @@ impl ImportResolver {
             }
             ("kernel32.dll", "ReadFile") => {
                 // a0=h, a1=buf, a2=len, a3=&read
-                let len = a2 as usize;
+                let len = (a2 as usize).min(64 * 1024 * 1024);
                 let mut buf = vec![0u8; len];
-                let n = self.files.read(a0, &mut buf);
-                std::ptr::copy_nonoverlapping(buf.as_ptr(), a1 as *mut u8, n as usize);
-                if a3 != 0 { *(a3 as *mut u32) = n; }
+                let n = self.files.read(a0, &mut buf) as usize;
+                if n > 0 && okp(a1, n as u64) {
+                    std::ptr::copy_nonoverlapping(buf.as_ptr(), a1 as *mut u8, n);
+                }
+                if okp(a3, 4) { *(a3 as *mut u32) = n as u32; }
                 c.gpr.rax = 1;
                 true
             }
             ("kernel32.dll", "WriteFile") => {
-                let len = a2 as usize;
+                let len = if okp(a1, a2) { a2 as usize } else { 0 };
                 let buf = std::slice::from_raw_parts(a1 as *const u8, len);
                 let n = self.files.write(a0, buf);
-                if a3 != 0 { *(a3 as *mut u32) = n; }
+                if okp(a3, 4) { *(a3 as *mut u32) = n; }
                 c.gpr.rax = 1;
                 true
             }
@@ -463,15 +509,17 @@ impl ImportResolver {
                 // SetFilePointer(h, off, &hi, method); SetFilePointerEx(h, &off, &new, method).
                 // The move method is the 4th register arg (R9) in both; Ex takes
                 // the offset by pointer (the old code read both from wrong slots).
-                let off = if func.ends_with("Ex") { *(a1 as *const i64) } else { a1 as i64 };
+                let off = if func.ends_with("Ex") {
+                    if okp(a1, 8) { *(a1 as *const i64) } else { 0 }
+                } else { a1 as i64 };
                 let pos = self.files.seek(a0, off, a3 as u32);
-                if func.ends_with("Ex") && a2 != 0 { *(a2 as *mut u64) = pos; }
+                if func.ends_with("Ex") && okp(a2, 8) { *(a2 as *mut u64) = pos; }
                 c.gpr.rax = pos;
                 true
             }
             ("kernel32.dll", "GetFileSize") | ("kernel32.dll", "GetFileSizeEx") => {
                 let sz = self.files.size(a0);
-                if func.ends_with('x') && a1 != 0 { *(a1 as *mut u64) = sz; }
+                if func.ends_with('x') && okp(a1, 8) { *(a1 as *mut u64) = sz; }
                 c.gpr.rax = sz;
                 true
             }
@@ -517,21 +565,21 @@ impl ImportResolver {
                 // within the same process. Our handles are table keys, so the
                 // duplicate is the same value; DUPLICATE_CLOSE_SOURCE (0x1,
                 // 7th argument at [rsp+0x38]) additionally closes the source.
-                let a6 = *(arg(2) as *const u64);
+                let a6 = if crate::dispatch::plausible_mem(arg(2), 8) { *(arg(2) as *const u64) } else { 0 };
                 let ok = a1 != 0;
                 if ok {
-                    if a3 != 0 { *(a3 as *mut u64) = a1; }
+                    if okp(a3, 8) { *(a3 as *mut u64) = a1; }
                     if a6 & 1 != 0 { self.files.close(a1); }
                 }
                 c.gpr.rax = ok as u64;
                 true
             }
             ("kernel32.dll", "SwitchToThread") | ("kernel32.dll", "YieldProcessor") => { c.gpr.rax = 1; true }
-            ("kernel32.dll", "VirtualProtect") => { if a3 != 0 { *(a3 as *mut u32) = 0x40; } c.gpr.rax = 1; true }
+            ("kernel32.dll", "VirtualProtect") => { if okp(a3, 4) { *(a3 as *mut u32) = 0x40; } c.gpr.rax = 1; true }
             ("kernel32.dll", "VirtualQuery") => {
                 // Minimal MEMORY_BASIC_INFORMATION (48 bytes on x64), answered
                 // from the tracked-heap table.
-                if a1 != 0 {
+                if okp(a1, 48) {
                     let b = a1 as *mut u8;
                     std::ptr::write_bytes(b, 0, 48);
                     match heap_block_containing(a0) {
@@ -596,7 +644,7 @@ impl ImportResolver {
                 true
             }
             ("kernel32.dll", "FindNextFileA") | ("kernel32.dll", "FindNextFileW") => {
-                c.gpr.rax = self.files.find_next(a0, a1) as u64;
+                c.gpr.rax = if a1 == 0 || okp(a1, 0x230) { self.files.find_next(a0, a1) as u64 } else { 0 };
                 true
             }
             ("kernel32.dll", "FindClose") => { self.files.find_close(a0); c.gpr.rax = 1; true }
@@ -610,7 +658,7 @@ impl ImportResolver {
                 let width = if func.ends_with('W') { 2 } else { 1 };
                 let bytes = s.as_bytes();
                 let n = (a2 as usize / width).saturating_sub(1).min(bytes.len());
-                if a1 != 0 {
+                if okp(a1, (n * width + width) as u64) {
                     for i in 0..n { *(a1 as *mut u8).add(i * width) = bytes[i]; }
                     *(a1 as *mut u8).add(n * width) = 0;
                 }
@@ -621,8 +669,12 @@ impl ImportResolver {
                 c.gpr.rax = self.files.cmdline_ptr(func.ends_with('W')); true
             }
             ("kernel32.dll", "GetEnvironmentStringsA") | ("kernel32.dll", "GetEnvironmentStringsW") => {
-                c.gpr.rax = 0; true
+                // A stable EMPTY environment block (double NUL). Returning 0
+                // left CRT/env walkers operating on NULL.
+                c.gpr.rax = empty_env_block(func.ends_with('W'));
+                true
             }
+            ("kernel32.dll", "FreeEnvironmentStringsA") | ("kernel32.dll", "FreeEnvironmentStringsW") => { c.gpr.rax = 1; true }
             ("kernel32.dll", "GetEnvironmentVariableA") | ("kernel32.dll", "GetEnvironmentVariableW") => {
                 c.gpr.rax = 0; true
             }
@@ -637,14 +689,18 @@ impl ImportResolver {
                     "ord#2" | "XInputGetState" => {
                         // a0 = user index, a1 = XINPUT_STATE*
                         match input.xinput_get_state(a0 as u32) {
-                            Some(st) => { st.write_to(a1 as *mut u8); c.gpr.rax = 0; }
+                            Some(st) => {
+                                if okp(a1, 24) { st.write_to(a1 as *mut u8); c.gpr.rax = 0; }
+                                else { c.gpr.rax = 0x48f; }
+                            }
                             None => { c.gpr.rax = 0x48f; } // ERROR_DEVICE_NOT_CONNECTED
                         }
                         true
                     }
                     "ord#3" | "XInputSetState" => {
-                        let motors = *(a1 as *const u16); // wLeftMotorSpeed
-                        let right = *((a1 as *const u16).add(1));
+                        let (motors, right) = if okp(a1, 4) {
+                            (*(a1 as *const u16), *((a1 as *const u16).add(1)))
+                        } else { (0, 0) };
                         c.gpr.rax = input.xinput_set_state(a0 as u32, motors, right) as u64;
                         true
                     }
@@ -672,7 +728,7 @@ impl ImportResolver {
             }
             ("user32.dll", "GetCursorPos") => {
                 let ms = crate::input::global().mouse_state(); let (x, y) = (ms.x, ms.y);
-                if a0 != 0 { *(a0 as *mut i32) = x; *((a0 as *mut i32).add(1)) = y; }
+                if okp(a0, 8) { *(a0 as *mut i32) = x; *((a0 as *mut i32).add(1)) = y; }
                 c.gpr.rax = 1; true
             }
             ("user32.dll", "GetSystemMetrics") => { c.gpr.rax = 0; true }
@@ -686,7 +742,7 @@ impl ImportResolver {
                 match func {
                     "XAudio2Create" => {
                         let vt = crate::audio::xaudio2_create_vtable(crate::audio::global());
-                        if a0 != 0 { *(a0 as *mut u64) = vt; }
+                        if okp(a0, 8) { *(a0 as *mut u64) = vt; }
                         c.gpr.rax = if vt == 0 { 0x8000_4005 } else { 0 };
                         true
                     }
@@ -711,7 +767,7 @@ impl ImportResolver {
                 let bytes = if blob != 0 { std::slice::from_raw_parts(blob as *const u8, size) } else { &[] };
                 let desc = crate::dxbc::parse(bytes).unwrap_or_default();
                 let obj = crate::dxbc::make_object(desc);
-                if out != 0 { *(out as *mut u64) = obj; }
+                if okp(out, 8) { *(out as *mut u64) = obj; }
                 c.gpr.rax = 0;
                 true
             }
@@ -813,22 +869,58 @@ impl Default for ImportResolver {
     fn default() -> Self { Self::new_host() }
 }
 
+/// Plausibility guard for guest out-pointers: same policy as the dispatcher's
+/// memory validator (reject the null page, wrap-around and the kernel range).
+/// Every handler that writes through a guest pointer must check this first —
+/// the degraded engine state passed pointers like 0x80 and killed the host
+/// (SEGV at 0x80, build #155).
+fn okp(p: u64, len: u64) -> bool { crate::dispatch::plausible_mem(p, len) }
+
+/// Leaked, process-stable EMPTY environment blocks (narrow + wide): just the
+/// double NUL terminator, as GetEnvironmentStrings must return.
+fn empty_env_block(wide: bool) -> u64 {
+    static NARROW: OnceLock<u64> = OnceLock::new();
+    static WIDE: OnceLock<u64> = OnceLock::new();
+    if wide {
+        *WIDE.get_or_init(|| {
+            let b: Vec<u8> = vec![0u8; 4]; // L"\0\0"
+            let p = b.as_ptr() as u64;
+            std::mem::forget(b);
+            p
+        })
+    } else {
+        *NARROW.get_or_init(|| {
+            let b: Vec<u8> = vec![0u8; 2]; // "\0\0"
+            let p = b.as_ptr() as u64;
+            std::mem::forget(b);
+            p
+        })
+    }
+}
+
 unsafe fn read_cstr(ptr: u64, wide: bool) -> String {
     // Never dereference a wild pointer here: after a failed boot allocation
     // the game passes garbage module/path pointers (device log: fatal SIGSEGV
     // at 0x80 inside the runtime with "KERNEL32.dll" still warm in x6/x7).
     // Reject the null page and the kernel/-1 range — the same policy as
-    // `plausible_mem` — and let callers see an empty string instead.
+    // `plausible_mem` — and check EVERY byte read, so even a
+    // plausible-but-unmapped pointer cannot crash the host.
     if ptr < 0x1_0000 || (ptr >> 48) == 0xffff { return String::new(); }
     if wide {
         let mut v = Vec::new();
         let mut p = ptr as *const u16;
-        loop { let ch = *p; if ch == 0 { break; } v.push(ch); p = p.add(1); if v.len() > 4096 { break; } }
+        loop {
+            if !okp(p as u64, 2) { break; }
+            let ch = *p; if ch == 0 { break; } v.push(ch); p = p.add(1); if v.len() > 4096 { break; }
+        }
         String::from_utf16_lossy(&v)
     } else {
         let mut v = Vec::new();
         let mut p = ptr as *const u8;
-        loop { let ch = *p; if ch == 0 { break; } v.push(ch); p = p.add(1); if v.len() > 4096 { break; } }
+        loop {
+            if !okp(p as u64, 1) { break; }
+            let ch = *p; if ch == 0 { break; } v.push(ch); p = p.add(1); if v.len() > 4096 { break; }
+        }
         String::from_utf8_lossy(&v).into_owned()
     }
 }
@@ -855,6 +947,11 @@ unsafe fn read_cstr(ptr: u64, wide: bool) -> String {
 // only occupies address space, zeroed pages arrive on first touch
 // (Windows-like lazy commit), RSS grows with what the game actually uses, and
 // a separate, higher reservation cap applies.
+//
+// D018: in-arena MEM_COMMIT requests (VirtualAlloc with a non-null
+// lpAddress inside a tracked reservation) return the requested base and no
+// longer consume the reservation cap — the engine's own sub-allocations are
+// free, exactly like on Windows.
 
 #[derive(Clone, Copy)]
 struct Block { size: usize, align: usize, mmap: bool }
@@ -922,14 +1019,18 @@ fn heap_budget() -> usize {
 
 /// Cap on *reserved* (mmap'd, lazily committed) bytes — intentionally much
 /// higher than the committed budget: reserved pages only become RSS when the
-/// game touches them. Override with `GOW_RESERVE_MB` (default 8192).
+/// game touches them, and the engine may reserve an 8-16 GiB VA arena on a
+/// device with far less RAM. Build #155: the engine's own arena hit the old
+/// 8192 MiB cap and the next in-arena commit fell back to the committed heap
+/// (D018 makes in-arena commits free, and this cap now only counts genuinely
+/// new reservations). Override with `GOW_RESERVE_MB` (default 32768).
 fn reserve_budget() -> usize {
     static B: OnceLock<usize> = OnceLock::new();
     *B.get_or_init(|| {
         std::env::var("GOW_RESERVE_MB")
             .ok()
             .and_then(|v| v.trim().parse::<usize>().ok())
-            .unwrap_or(8192) * 1024 * 1024
+            .unwrap_or(32768) * 1024 * 1024
     })
 }
 
@@ -999,7 +1100,8 @@ fn heap_alloc_raw(size: usize, align: usize, page: bool) -> *mut u8 {
 
 /// Serve a big block from mmap(MAP_NORESERVE): address space is reserved now,
 /// zeroed pages materialise on first touch, and only touched pages count
-/// towards RSS. Returns null when the reservation cap refuses or mmap fails.
+/// towards RSS. Returns null when the reservation cap refuses or mmap fails
+/// (the caller then falls back to the committed heap, D018).
 #[cfg(unix)]
 fn mmap_reserve(size: usize) -> *mut u8 {
     let rs = RESERVED_BYTES.fetch_add(size, Ordering::Relaxed) + size;
@@ -1008,7 +1110,7 @@ fn mmap_reserve(size: usize) -> *mut u8 {
         let n = REFUSED.fetch_add(1, Ordering::Relaxed);
         if n < 8 || n % 4096 == 0 {
             crate::glog!(
-                "[gow.heap] reservation refused: {} MiB requested ({} MiB reserved, cap {} MiB); allocation returns NULL",
+                "[gow.heap] reservation refused: {} MiB requested ({} MiB reserved, cap {} MiB); falling back to committed heap",
                 size / (1024 * 1024),
                 RESERVED_BYTES.load(Ordering::Relaxed) / (1024 * 1024),
                 reserve_budget() / (1024 * 1024)
@@ -1068,7 +1170,8 @@ fn heap_size_raw(p: *mut u8) -> usize {
     alloc_table().lock().unwrap().get(&(p as usize)).map(|b| b.size).unwrap_or(0)
 }
 
-/// Find the tracked block containing `addr` (for VirtualQuery).
+/// Find the tracked block containing `addr` (for VirtualQuery and the
+/// VirtualAlloc in-arena commit path, D018).
 fn heap_block_containing(addr: u64) -> Option<(usize, usize)> {
     let t = alloc_table().lock().unwrap();
     let a = addr as usize;
@@ -1187,7 +1290,8 @@ thread_local! {
 /// GetCurrentThreadId: the id is stable for the life of the thread. The old
 /// counter returned a NEW value on every call, so anything keying per-thread
 /// state (CRT caches, engine thread registries) grew without bound.
-fn tid() -> u64 {
+/// Public: the dispatcher stamps the same value into TEB ClientId.ThreadId.
+pub fn tid() -> u64 {
     MY_TID.with(|t| {
         let v = t.get();
         if v != 0 { return v; }
