@@ -2,6 +2,11 @@
 //! Windows paths the game uses (relative to its install dir, or absolute
 //! `C:\...`) are translated to `<game_dir>/<relative>`. Handles are small
 //! integers the guest sees; the host holds the real FILE*.
+//!
+//! Mappings (D016): `CreateFileMapping` mmaps the file (MAP_PRIVATE) instead of
+//! reading it whole into RAM — GoW pack files are gigabytes and the eager copy
+//! is what ate the device's memory. Views are tracked so `UnmapViewOfFile`
+//! really unmaps. Falls back to the old eager Vec when mmap is unavailable.
 
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
@@ -9,6 +14,14 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+
+#[cfg(unix)]
+extern "C" {
+    fn mmap(addr: *mut u8, len: usize, prot: i32, flags: i32, fd: i32, off: i64) -> *mut u8;
+    fn munmap(addr: *mut u8, len: usize) -> i32;
+}
+#[cfg(unix)]
+use std::os::unix::io::AsRawFd;
 
 pub const GENERIC_READ: u32 = 0x8000_0000;
 pub const GENERIC_WRITE: u32 = 0x4000_0000;
@@ -27,7 +40,17 @@ struct Handle {
 struct Mapping {
     base: u64,
     len: usize,
+    /// Kept open while the mapping exists (keeps the mmap fd valid). Closing
+    /// the mapping handle drops the File; MAP_PRIVATE pages stay valid.
+    file: Option<File>,
+    /// Fallback backing when mmap is unavailable.
     _buf: Vec<u8>,
+    is_mmap: bool,
+}
+
+struct ViewInfo {
+    len: usize,
+    is_mmap: bool,
 }
 
 pub struct FileTable {
@@ -35,6 +58,7 @@ pub struct FileTable {
     next: AtomicU64,
     handles: Mutex<HashMap<u64, Handle>>,
     mappings: Mutex<HashMap<u64, Mapping>>,
+    views: Mutex<HashMap<u64, ViewInfo>>,
     finds: Mutex<HashMap<u64, (Vec<PathBuf>, usize)>>,
 }
 
@@ -45,6 +69,7 @@ impl FileTable {
             next: AtomicU64::new(0x100),
             handles: Mutex::new(HashMap::new()),
             mappings: Mutex::new(HashMap::new()),
+            views: Mutex::new(HashMap::new()),
             finds: Mutex::new(HashMap::new()),
         }
     }
@@ -126,11 +151,25 @@ impl FileTable {
     }
 
     pub fn close(&self, handle: u64) -> bool {
+        // A mapping handle: close the fd but keep the mapping alive (Windows
+        // allows CloseHandle on a mapping with open views; MAP_PRIVATE pages
+        // stay valid without the fd).
+        {
+            let mut m = self.mappings.lock().unwrap();
+            if let Some(mm) = m.get_mut(&handle) {
+                mm.file = None;
+                return true;
+            }
+        }
         self.handles.lock().unwrap().remove(&handle).is_some()
     }
 
     /// Create a file mapping of `size` bytes (0 = whole file) on `file_handle`.
     /// Returns a pseudo mapping handle (>0) or INVALID_HANDLE.
+    ///
+    /// The file is `mmap`ed (MAP_PRIVATE) instead of read into RAM: pages
+    /// arrive from the page cache on demand (D016). Falls back to the eager
+    /// Vec when mmap is unavailable or fails.
     pub fn create_mapping(&self, file_handle: u64, size: u64) -> u64 {
         let h = self.handles.lock().unwrap();
         let e = match h.get(&file_handle) {
@@ -139,41 +178,78 @@ impl FileTable {
         };
         let path = e.path.clone();
         drop(h);
-        let real = if size == 0 {
-            std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
-        } else {
-            size
+        let file = match File::open(&path) {
+            Ok(f) => f,
+            Err(_) => return INVALID_HANDLE,
         };
-        // Read the whole file into a buffer we own; MapViewOfFile returns its ptr.
+        let fsize = file.metadata().map(|m| m.len()).unwrap_or(0);
+        let n = if size == 0 || size > fsize { fsize } else { size } as usize;
+        let id = self.next.fetch_add(1, Ordering::Relaxed);
+
+        #[cfg(unix)]
+        {
+            if n > 0 {
+                const PROT_READ: i32 = 1;
+                const PROT_WRITE: i32 = 2;
+                const MAP_PRIVATE: i32 = 2;
+                let p = unsafe {
+                    mmap(std::ptr::null_mut(), n, PROT_READ | PROT_WRITE, MAP_PRIVATE, file.as_raw_fd(), 0)
+                };
+                // MAP_FAILED is (void*)-1.
+                if p as isize != -1 && !p.is_null() {
+                    self.mappings.lock().unwrap().insert(id, Mapping {
+                        base: p as u64, len: n, file: Some(file), _buf: Vec::new(), is_mmap: true,
+                    });
+                    return id;
+                }
+            }
+        }
+
+        // Fallback (non-unix or mmap failure): eager copy, as before.
+        drop(file);
         match std::fs::read(&path) {
             Ok(data) => {
-                let n = (real as usize).min(data.len());
                 let mut buf = data;
                 buf.truncate(n);
                 let ptr = buf.as_ptr() as u64;
-                let id = self.next.fetch_add(1, Ordering::Relaxed);
-                self.mappings.lock().unwrap().insert(id, Mapping { base: ptr, len: n, _buf: buf });
+                self.mappings.lock().unwrap().insert(id, Mapping {
+                    base: ptr, len: n, file: None, _buf: buf, is_mmap: false,
+                });
                 id
             }
             Err(_) => INVALID_HANDLE,
         }
     }
 
-    /// Return the base pointer for a mapping and a view offset/size.
+    /// Return the base pointer for a mapping and a view offset/size. The view
+    /// is registered so UnmapViewOfFile can release it.
     pub fn map_view(&self, mapping: u64, offset: u64, size: u64) -> u64 {
         let m = self.mappings.lock().unwrap();
-        match m.get(&mapping) {
-            Some(mm) => {
-                let _ = size;
-                if offset as usize >= mm.len { return 0; }
-                mm.base + offset
-            }
-            None => 0,
-        }
+        let mm = match m.get(&mapping) {
+            Some(mm) => mm,
+            None => return 0,
+        };
+        if offset as usize >= mm.len { return 0; }
+        let base = mm.base + offset;
+        let avail = mm.len - offset as usize;
+        let vlen = if size == 0 { avail } else { (size as usize).min(avail) };
+        let is_mmap = mm.is_mmap;
+        drop(m);
+        self.views.lock().unwrap().insert(base, ViewInfo { len: vlen, is_mmap });
+        base
     }
 
-    pub fn unmap_view(&self, _base: u64) -> bool {
-        // The mapping buffer stays alive with the Mapping entry.
+    pub fn unmap_view(&self, base: u64) -> bool {
+        if let Some(v) = self.views.lock().unwrap().remove(&base) {
+            #[cfg(unix)]
+            if v.is_mmap {
+                let len = (v.len + 0xfff) & !0xfff;
+                unsafe { munmap(base as *mut u8, len); }
+            }
+            return true;
+        }
+        // Not a registered view (e.g. a Vec-backed mapping): the buffer stays
+        // alive with the Mapping entry, matching the old behaviour.
         true
     }
 

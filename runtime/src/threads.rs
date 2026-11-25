@@ -64,28 +64,45 @@ impl Default for SyncObjects {
 /// Thread table: maps handle -> joinable host thread.
 pub struct ThreadTable {
     next: AtomicU64,
+    /// handle -> stable guest thread id (GetThreadId, D017).
+    tids: Mutex<HashMap<u64, u64>>,
 }
 
 impl ThreadTable {
-    pub fn new() -> Self { Self { next: AtomicU64::new(0x8000) } }
+    pub fn new() -> Self {
+        Self {
+            next: AtomicU64::new(0x8000),
+            tids: Mutex::new(HashMap::new()),
+        }
+    }
 
     /// Spawn a guest thread running recompiled code at `start_rva` with `param`
     /// in RCX. The guest function table must already be installed.
     pub unsafe fn spawn(&self, parent: *mut GowCpu, start_rva: u64, param: u64) -> u64 {
         let id = self.next.fetch_add(1, Ordering::Relaxed);
+        // Assign the thread's guest id up front so GetThreadId(handle) and the
+        // thread's own GetCurrentThreadId() agree (D017).
+        let tid = crate::win32::alloc_tid();
+        self.tids.lock().unwrap().insert(id, tid);
         let image_base = (*parent).image_base;
         let image_size = (*parent).image_size as usize;
         let map: Vec<(u32, GowFunc)> = (*parent).func_map.iter().map(|(k, v)| (*k, *v)).collect();
         std::thread::spawn(move || {
+            crate::win32::set_current_tid(tid);
             let cpu = GowCpu::new(image_base, image_size);
             let c = Box::into_raw(cpu);
             for (rva, f) in map { (*c).func_map.insert(rva, f); }
             (*c).gpr.rcx = param;
-            log_line(&format!("[gow.thread] start rva=0x{start_rva:x} param=0x{param:x}"));
+            log_line(&format!("[gow.thread] start rva=0x{start_rva:x} param=0x{param:x} tid={tid}"));
             crate::dispatch::gow_run(c, start_rva as u32);
             drop(Box::from_raw(c));
         });
         id
+    }
+
+    /// The stable guest id behind a CreateThread handle (GetThreadId).
+    pub fn thread_id(&self, handle: u64) -> u64 {
+        self.tids.lock().unwrap().get(&handle).copied().unwrap_or(0)
     }
 }
 
