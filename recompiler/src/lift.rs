@@ -293,17 +293,60 @@ pub fn lift(pe: &PeImage, out_dir: &std::path::Path) -> Result<LiftOutput> {
         v
     };
     let text_end = pe.sections.iter().find(|s| s.name == ".text").map(|s| s.end_rva()).unwrap_or(pe.size_of_image);
+    let pdata_end_of = |start: u32| -> Option<u32> {
+        pdata_sorted.binary_search_by_key(&start, |r| r.0).ok().map(|i| pdata_sorted[i].1)
+    };
+    // MSVC emits ONE logical function as several contiguous `.pdata` chunks that
+    // FALL THROUGH into one another (e.g. the std::string helper: 0xb3810 ends
+    // mid-logic at 0xb386b, which continues into 0xb38d9). A chunk "continues"
+    // when it has no trailing padding, its last real instruction is not a
+    // terminator, and the next chunk starts exactly where it ends. The emitter
+    // must decode a whole fall-through chain as one function: otherwise the
+    // chunk returns early with the guest registers (rbp!) left clobbered — the
+    // frame corruption whose canary check produced 0xC0000409 on device.
+    let chunk_continues = |start: u32| -> bool {
+        let e = match pdata_end_of(start) { Some(e) if e > start => e, _ => return false };
+        if !entries.contains(&e) { return false; }
+        let off = match PeImage::rva_to_off(&pe.sections, start) { Some(o) => o, None => return false };
+        let len = (e - start) as usize;
+        if pe.bytes.len() < off + len { return false; }
+        let code = &pe.bytes[off..off + len];
+        let mut d = Decoder::with_ip(64, code, pe.image_base + start as u64, DecoderOptions::NONE);
+        let mut insn = Instruction::default();
+        let mut last_end = 0u32;
+        let mut last_m = iced_x86::Mnemonic::INVALID;
+        while d.can_decode() {
+            d.decode_out(&mut insn);
+            if insn.is_invalid() { break; }
+            let m = insn.mnemonic();
+            if !matches!(m, iced_x86::Mnemonic::Int3 | iced_x86::Mnemonic::Nop) {
+                last_end = (insn.ip() + insn.len() as u64 - pe.image_base) as u32;
+                last_m = m;
+            }
+        }
+        use iced_x86::Mnemonic as Mn;
+        last_end == e
+            && !matches!(last_m, Mn::Ret | Mn::Retf | Mn::Jmp | Mn::Iretd | Mn::Iretq | Mn::Iret)
+    };
     // For a function start, its code ends at its .pdata end if known, else at the
-    // next known entry (capped) — never a blind 64 KB.
+    // next known entry (capped) — never a blind 64 KB — EXTENDED through any
+    // fall-through chain.
     let func_end = |start: u32| -> u32 {
-        // Use the LARGER of the .pdata end and the next known entry: .pdata can
-        // both underestimate (code past its range) and overlap (a nested entry
-        // inside the range). Taking the max covers both; jump targets beyond it
-        // are handled as tail calls/trampolines.
-        let pd_end = pdata_sorted.binary_search_by_key(&start, |r| r.0).ok().map(|i| pdata_sorted[i].1);
-        let next = entries.range((start + 1)..).next().copied().unwrap_or(text_end);
-        let bound = match pd_end { Some(e) => e.max(next), None => next };
-        bound.min(text_end).max(start + 1)
+        let mut cur = start;
+        let mut hops = 0;
+        loop {
+            let pd_end = pdata_end_of(cur);
+            let next = entries.range((cur + 1)..).next().copied().unwrap_or(text_end);
+            let bound = match pd_end { Some(e) => e.max(next), None => next };
+            let bound = bound.min(text_end).max(cur + 1);
+            // Follow a genuine fall-through into the next contiguous chunk.
+            if hops < 64 && chunk_continues(cur) {
+                if let Some(e) = pd_end {
+                    if e > cur { cur = e; hops += 1; continue; }
+                }
+            }
+            return bound;
+        }
     };
 
     let mut shard_protos = String::new();
@@ -353,6 +396,15 @@ pub fn lift(pe: &PeImage, out_dir: &std::path::Path) -> Result<LiftOutput> {
         }
         let mut dec = Decoder::with_ip(64, code, image_base + entry_rva as u64, DecoderOptions::NONE);
         let mut insn = Instruction::default();
+        // The last emitted instruction that is not int3/nop padding, with its
+        // end RVA. MSVC emits one logical function as several contiguous
+        // `.pdata` chunks that FALL THROUGH into one another (e.g. the
+        // std::string helper 0xb3810 ends mid-logic at 0xb386b). If this chunk's
+        // last real instruction is not a terminator, control continues at
+        // `range_end`; we must transfer there or the C function returns early
+        // with the guest registers (rbp!) left clobbered — the frame-corruption
+        // / 0xC0000409 canary failure seen on device.
+        let mut last_real: Option<(iced_x86::Mnemonic, u32)> = None;
         while dec.can_decode() {
             let pos_before = dec.position();
             dec.decode_out(&mut insn);
@@ -364,6 +416,20 @@ pub fn lift(pe: &PeImage, out_dir: &std::path::Path) -> Result<LiftOutput> {
             fmt.format(&insn, &mut text);
             writeln!(sc, "  /* 0x{rva:x}: {text} */")?;
             emit(&mut sc, &insn, image_base, &iat, &starts, entry_rva, range_end, &entries, &mut unimpl, &mut unimpl_instances)?;
+            let m = insn.mnemonic();
+            if !matches!(m, iced_x86::Mnemonic::Int3 | iced_x86::Mnemonic::Nop) {
+                let end = (insn.ip() + insn.len() as u64).wrapping_sub(image_base) as u32;
+                last_real = Some((m, end));
+            }
+        }
+        if let Some((m, end)) = last_real {
+            use iced_x86::Mnemonic as Mn;
+            let is_term = matches!(m, Mn::Ret | Mn::Retf | Mn::Jmp | Mn::Iretd | Mn::Iretq | Mn::Iret);
+            // Only when the last real instruction ends exactly at the chunk
+            // boundary (no trailing padding) and the boundary is a known entry.
+            if !is_term && end == range_end && entries.contains(&range_end) {
+                writeln!(sc, "  f_{range_end:x}(cpu); return;")?;
+            }
         }
         writeln!(sc, "}}\n")?;
         if sc.len() >= SHARD_MAX_BYTES {

@@ -59,3 +59,27 @@ O backend nativo é o alvo final; DXVK é fallback até a paridade.
 Imports desconhecidos, alvos de salto não resolvidos e instruções não liftadas são
 contados e logados (logcat), nunca silenciados. Nenhuma métrica é fabricada;
 `docs/PERFORMANCE.md` só recebe números medidos no dispositivo.
+
+## D020 — Chunks .pdata contíguos com fall-through são UMA função
+O MSVC emite UMA função lógica como VÁRIOS registros `.pdata` contíguos que caem
+um no outro (ex.: o helper de `std::string` `0xb3810` termina no meio da lógica em
+`0xb386b`, que continua até `0xb38d9`). O lifter tratava cada registro como uma
+função completa e fechava a função C sem transferir para o próximo chunk, então o
+chunk retornava cedo com os registradores guest clobberados — em particular `rbp`
+ficava com `[string+0x18] = 0xf` (a capacidade SSO do `std::string` do MSVC).
+O chamador (`f_4024e0`) usa `rbp` como base de frame, então o próximo acesso
+`movdqu [rbp-0x38]` calculava `0xffffffffffffffd7` (exatamente o primeiro
+`badstore` do log), destruía o frame e fazia `__security_check_cookie` falhar →
+`TerminateProcess(0xC0000409)` (STATUS_STACK_BUFFER_OVERRUN) → loop degradado.
+Havia 18.569 chunks assim em 51.869 do `.pdata`.
+
+Correção: `func_end()` agora **segue a cadeia de fall-through** (chunk sem padding
+final, última instrução real não-terminadora, e o próximo chunk começa exatamente
+onde este termina) e o emissor decodifica a cadeia inteira como uma função só,
+com os rótulos/gotos cruzando os limites. O fallback de fall-through simples
+(`f_<range_end>(cpu); return;`) fica como rede de segurança.
+
+## D021 — Log de fault de memória com dedup por (rva, addr)
+Um guest corrompido em loop apertado gerava 277.027 linhas `badload` idênticas
+(455 MB de log), enterrando a causa real e enchendo o armazenamento do aparelho.
+Cada par (rva, addr) agora loga uma vez só, com teto de 4096 entradas.

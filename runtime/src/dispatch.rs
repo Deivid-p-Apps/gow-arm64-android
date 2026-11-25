@@ -202,6 +202,19 @@ fn misscall_seen() -> &'static Mutex<std::collections::HashSet<u64>> {
     S.get_or_init(|| Mutex::new(std::collections::HashSet::new()))
 }
 
+/// Returns true the FIRST time a given (rva, addr) memory fault is seen, false
+/// afterwards. Keeps the diagnostic log bounded when a corrupted guest loops on
+/// the same wild address (build #167: 277k identical badloads → 455 MB log,
+/// which buried the real 0xC0000409 root cause and filled device storage).
+pub fn memfault_seen(rva: u64, addr: u64) -> bool {
+    static S: OnceLock<Mutex<std::collections::HashSet<(u64, u64)>>> = OnceLock::new();
+    let seen = S.get_or_init(|| Mutex::new(std::collections::HashSet::new()));
+    let mut g = match seen.lock() { Ok(g) => g, Err(p) => p.into_inner() };
+    // Hard cap so a pathological run cannot grow this without bound.
+    if g.len() >= 4096 { return false; }
+    g.insert((rva, addr))
+}
+
 /// Function table emitted by the recompiler (gow_game.c) is registered at
 /// startup via `install_registry`, so no extern symbol is required here.
 
@@ -458,8 +471,13 @@ pub unsafe extern "C" fn gow_test_cc(cpu: *mut GowCpu, cc: u32) -> u64 {
 pub unsafe extern "C" fn gow_load(cpu: *mut GowCpu, addr: u64, size: u32) -> u64 {
     if !plausible_mem(addr, size as u64) {
         let c = &*cpu;
-        crate::glog!("[gow.badload] load addr=0x{addr:x} size={size} rva=0x{:x} rsp=0x{:x} rbp=0x{:x} rcx=0x{:x} rax=0x{:x}",
-            c.rip.wrapping_sub(c.image_base), c.gpr.rsp, c.gpr.rbp, c.gpr.rcx, c.gpr.rax);
+        let rva = c.rip.wrapping_sub(c.image_base);
+        // Dedup by (rva, addr): a hot loop hitting the same wild address must
+        // not write hundreds of thousands of identical lines (the 455 MB log).
+        if memfault_seen(rva, addr) {
+            crate::glog!("[gow.badload] load addr=0x{addr:x} size={size} rva=0x{rva:x} rsp=0x{:x} rbp=0x{:x} rcx=0x{:x} rax=0x{:x}",
+                c.gpr.rsp, c.gpr.rbp, c.gpr.rcx, c.gpr.rax);
+        }
         return 0;
     }
     let p = addr as *const u8;
@@ -476,9 +494,12 @@ pub unsafe extern "C" fn gow_load(cpu: *mut GowCpu, addr: u64, size: u32) -> u64
 pub unsafe extern "C" fn gow_store(cpu: *mut GowCpu, addr: u64, v: u64, size: u32) {
     if !plausible_mem(addr, size as u64) {
         let c = &*cpu;
-        crate::glog!("[gow.badstore] store addr=0x{addr:x} size={size} rva=0x{:x} rsp=0x{:x} rbp=0x{:x} rdi=0x{:x} rsi=0x{:x} rcx=0x{:x} rax=0x{:x}",
-            c.rip.wrapping_sub(c.image_base), c.gpr.rsp, c.gpr.rbp, c.gpr.rdi, c.gpr.rsi, c.gpr.rcx, c.gpr.rax);
-        crate::glog!("[gow.trace] recent calls: {}", format_trace(c));
+        let rva = c.rip.wrapping_sub(c.image_base);
+        if memfault_seen(rva, addr) {
+            crate::glog!("[gow.badstore] store addr=0x{addr:x} size={size} rva=0x{rva:x} rsp=0x{:x} rbp=0x{:x} rdi=0x{:x} rsi=0x{:x} rcx=0x{:x} rax=0x{:x}",
+                c.gpr.rsp, c.gpr.rbp, c.gpr.rdi, c.gpr.rsi, c.gpr.rcx, c.gpr.rax);
+            crate::glog!("[gow.trace] recent calls: {}", format_trace(c));
+        }
         return;
     }
     let p = addr as *mut u8;
