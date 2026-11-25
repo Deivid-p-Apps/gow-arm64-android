@@ -1,18 +1,18 @@
 //! Dispatcher + guest memory for recompiled x86-64 code.
 //!
-//! Control-flow model
-//! ------------------
-//! Generated functions (gow_game.c) never call each other with the C call
-//! mechanism. Each one sets the "next" function pointer/RVA in GowCpu and
-//! returns to a central loop (`gow_run`). This makes x86 call / ret / tail-jmp
-//! exact without relying on host stack frames:
-//!   * call  -> push return RVA onto the *guest* stack, set next = callee
-//!   * ret   -> pop the guest stack into next
-//!   * jmp   -> set next = target (loop continues, no C recursion)
-//! The loop is a trampoline; guest stack depth is bounded by the game itself.
+//! Control-flow model (D008)
+//! -------------------------
+//! Generated functions call each other with plain C calls (`f_<rva>(cpu)`);
+//! intra-function branches become `goto L_<rva>` in the emitted C. Only
+//! computed/unknown targets go through `gow_trampoline`/`gow_call_indirect`,
+//! and import thunks through `gow_import_call`. `gow_run` is the outermost
+//! driver: it dispatches the entry function and returns when the guest entry
+//! returns. Guest call/ret are emulated on the guest stack around each C call,
+//! so the guest stack depth is bounded by the game itself.
 
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 pub type GowFunc = unsafe extern "C" fn(*mut GowCpu);
 
@@ -59,7 +59,9 @@ pub struct GowCpu {
     pub image_base: u64,
     pub image_size: u64,
     pub image: *mut u8,
-    /// Owns the backing allocation for `image` (kept alive with the CPU).
+    /// Legacy field (C ABI): kept for layout compatibility. The backing
+    /// allocation now lives in the process-global shared-image registry (D015),
+    /// so this Vec stays empty.
     pub image_buf: Vec<u8>,
     /// Owns the guest stack allocation.
     pub stack_buf: Vec<u8>,
@@ -99,6 +101,23 @@ fn alloc_guest_block(size: usize) -> *mut u8 {
     unsafe { std::alloc::alloc_zeroed(layout) }
 }
 
+/// Write `s` as UTF-16 (plus NUL) at `base + *off` inside a TEB/PEB scratch
+/// area; returns (pointer, Length in bytes, MaximumLength in bytes) for an
+/// RTL_USER_PROCESS_PARAMETERS UNICODE_STRING. Advances `*off`.
+fn put_wide(base: u64, off: &mut usize, s: &str) -> (u64, u16, u16) {
+    let p = base + *off as u64;
+    let mut n = 0u16;
+    unsafe {
+        for ch in s.encode_utf16() {
+            *((p + n as u64 * 2) as *mut u16) = ch;
+            n += 1;
+        }
+        *((p + n as u64 * 2) as *mut u16) = 0;
+    }
+    *off += (n as usize + 1) * 2;
+    (p, n * 2, (n + 1) * 2)
+}
+
 /// Map `size` bytes at the fixed address `base` (MAP_FIXED). Returns
 /// (pointer, owned Vec, whether mapping succeeded). On failure, falls back to a
 /// normal Vec so the program still runs (with a logged warning).
@@ -134,6 +153,54 @@ fn map_at(base: u64, size: usize) -> (*mut u8, Vec<u8>, bool) {
     (p, v, false)
 }
 
+// ---------------------------------------------------------------------------
+// Shared guest-image mapping (D015)
+// ---------------------------------------------------------------------------
+
+/// Process-global registry of guest image mappings, keyed by base address.
+///
+/// Every `GowCpu::new` used to MAP_FIXED its own copy of the guest image at
+/// the same base (0x140000000). The first `CreateThread` spawns a fresh GowCpu
+/// for the new thread and the kernel silently REPLACED the mapping the main
+/// thread was executing from — zeroed code, instant corruption. The first
+/// mapping for a base now wins and is shared by every later CPU (thread
+/// spawns, activity re-runs).
+struct SharedImage {
+    ptr: *mut u8,
+    size: usize,
+    /// Empty when MAP_FIXED succeeded (the mapping owns the memory).
+    _buf: Vec<u8>,
+}
+unsafe impl Send for SharedImage {}
+
+fn shared_images() -> &'static Mutex<HashMap<u64, SharedImage>> {
+    static M: OnceLock<Mutex<HashMap<u64, SharedImage>>> = OnceLock::new();
+    M.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Map (or reuse) the guest image at `base`. Returns (pointer, mapped_at_fixed).
+fn map_at_shared(base: u64, size: usize) -> (*mut u8, bool) {
+    let mut map = shared_images().lock().unwrap();
+    if let Some(img) = map.get(&base) {
+        if img.size < size {
+            crate::glog!(
+                "[gow] WARNING: shared image at 0x{base:x} is 0x{:x} bytes but 0x{size:x} requested; reusing",
+                img.size
+            );
+        }
+        return (img.ptr, true);
+    }
+    let (p, buf, fixed) = map_at(base, size);
+    let mapped = buf.len().max(size);
+    map.insert(base, SharedImage { ptr: p, size: mapped, _buf: buf });
+    (p, fixed)
+}
+
+/// Distinct missed indirect-call targets (dedup for the MISSCALL log).
+fn misscall_seen() -> &'static Mutex<std::collections::HashSet<u64>> {
+    static S: OnceLock<Mutex<std::collections::HashSet<u64>>> = OnceLock::new();
+    S.get_or_init(|| Mutex::new(std::collections::HashSet::new()))
+}
 
 /// Function table emitted by the recompiler (gow_game.c) is registered at
 /// startup via `install_registry`, so no extern symbol is required here.
@@ -145,26 +212,42 @@ impl GowCpu {
     pub fn new(image_base: u64, image_size: usize) -> Box<Self> {
         // Map the guest image at its ORIGINAL virtual address (e.g. 0x140000000)
         // so guest pointers equal host pointers and absolute addresses in the
-        // recompiled code (globals, vtables) are valid. Falls back to a normal
-        // allocation if the fixed mapping is unavailable.
-        let (image, image_buf, fixed) = map_at(image_base, image_size);
+        // recompiled code (globals, vtables) are valid. The mapping is shared
+        // process-wide per base (D015): a second GowCpu (thread spawn, activity
+        // re-run) must never MAP_FIXED over live code.
+        let (image, fixed) = map_at_shared(image_base, image_size);
         let mut stack = vec![0u8; 16 * 1024 * 1024];
         // Leave headroom above the initial RSP: at a real process entry, [rsp]
         // holds a return address and callers' frames live at higher addresses.
         // Starting exactly at the buffer end makes writes like [rsp+8] fault.
         let rsp = unsafe { stack.as_mut_ptr().add(stack.len() - 0x8000) as u64 };
-        // Allocate a real TEB/PEB/TLS block so gs:/fs: accesses land on valid memory.
-        // Windows x64 TEB layout used here:
-        //   0x30 -> PEB (Self)
+        // Allocate a real TEB/PEB/TLS block so gs:/fs: accesses land on valid
+        // memory. Windows x64 TEB layout used here (corrected, build #155
+        // post-mortem: the PEB used to live at +0x30 and +0x60 stayed zero, so
+        // every `gs:[0x60]` PEB walk dereferenced NULL — the [0x40]/[0x60]/
+        // [0x80] small-offset badload family):
+        //   0x08/0x10 -> NtTib.StackBase/StackLimit
+        //   0x30 -> NtTib.Self (the TEB itself)
+        //   0x38 -> EnvironmentPointer
+        //   0x40/0x48 -> ClientId (process/thread id)
         //   0x58 -> ThreadLocalStoragePointer (array of TLS slot values)
-        //   0x148.. -> TlsSlots[64] (inline TLS storage)
+        //   0x60 -> ProcessEnvironmentBlock
+        //   0x148.. -> TlsSlots[64] (inline TLS storage, internal layout)
         let mut teb_buf = vec![0u8; 0x14000];
         let teb = teb_buf.as_mut_ptr() as u64;
         let peb = teb + 0x8000;
         let tls_ptr = teb + 0xC000; // TLS pointer array (distinct from PEB at +0x8000)
         unsafe {
-            *((teb + 0x30) as *mut u64) = peb;         // TEB->PEB
-            *((peb + 0x10) as *mut u64) = image_base;  // PEB->ImageBaseAddress
+            let stack_lo = stack.as_ptr() as u64;
+            let stack_hi = stack_lo + stack.len() as u64;
+            *((teb + 0x08) as *mut u64) = stack_hi;              // NtTib.StackBase
+            *((teb + 0x10) as *mut u64) = stack_lo;              // NtTib.StackLimit
+            *((teb + 0x30) as *mut u64) = teb;                   // NtTib.Self
+            let env_block = teb + 0x1400;                        // empty env block (L"\0\0")
+            *((teb + 0x38) as *mut u64) = env_block;             // EnvironmentPointer
+            *((teb + 0x40) as *mut u64) = std::process::id() as u64; // ClientId.ProcessId
+            *((teb + 0x48) as *mut u64) = crate::win32::tid();   // ClientId.ThreadId
+            *((teb + 0x60) as *mut u64) = peb;                   // ProcessEnvironmentBlock
             // 128 TLS slots. Each slot must point at a REAL per-module TLS block
             // (Windows' loader allocates one per module index). A null slot makes
             // code like `mov rax,[gs:0x58]; mov rdx,[rax]; mov [rdx+0x80],..` fault.
@@ -176,8 +259,59 @@ impl GowCpu {
                     *((tls_ptr + i * 8) as *mut u64) = blk as u64;
                 }
             }
-            *((teb + 0x58) as *mut u64) = tls_ptr;     // TEB->ThreadLocalStoragePointer
+            *((teb + 0x58) as *mut u64) = tls_ptr;               // ThreadLocalStoragePointer
             // Inline TlsSlots array at 0x148 (already zeroed).
+
+            // --- PEB ---
+            *((peb + 0x10) as *mut u64) = image_base;            // ImageBaseAddress
+            *((peb + 0x18) as *mut u64) = peb + 0x100;           // Ldr
+            *((peb + 0x20) as *mut u64) = teb + 0x1000;          // ProcessParameters
+            *((peb + 0x30) as *mut u64) = 0xdead_0001;           // ProcessHeap (matches GetProcessHeap)
+            // PEB_LDR_DATA at peb+0x100 with self-linked empty list heads:
+            // module enumeration finds zero modules instead of faulting on NULL.
+            let ldr = peb + 0x100;
+            *(ldr as *mut u32) = 0x30;                           // Length
+            *((ldr + 0x04) as *mut u32) = 1;                     // Initialized
+            for off in [0x10u64, 0x20, 0x30] {
+                *((ldr + off) as *mut u64) = ldr + off;          // Flink = self
+                *((ldr + off + 8) as *mut u64) = ldr + off;      // Blink = self
+            }
+            // --- RTL_USER_PROCESS_PARAMETERS at teb+0x1000 ---
+            // x64 offsets: +0x00 MaximumLength/Length, +0x08 Flags,
+            // +0x20/+0x28/+0x30 Standard handles, +0x38 CURDIR
+            // (UNICODE_STRING + Handle), +0x50 DllPath, +0x60 ImagePathName,
+            // +0x70 CommandLine, +0x80 Environment. A NULL ProcessParameters
+            // left CRT/engine walkers dereferencing NULL+small.
+            let pp = teb + 0x1000;
+            let strs = teb + 0x1100;
+            let mut so = 0usize;
+            let (cd_ptr, cd_len, cd_max) = put_wide(strs, &mut so, "C:\\");
+            let (dll_ptr, _, _) = put_wide(strs, &mut so, "");
+            let (img_ptr, img_len, img_max) = put_wide(strs, &mut so, "C:\\GoW.exe");
+            let (cmd_ptr, cmd_len, cmd_max) = put_wide(strs, &mut so, "GoW.exe");
+            *((pp + 0x00) as *mut u32) = 0x90;                   // MaximumLength
+            *((pp + 0x04) as *mut u32) = 0x90;                   // Length
+            *((pp + 0x08) as *mut u32) = 0;                      // Flags
+            *((pp + 0x20) as *mut u64) = 0xffff_fff4;            // StandardInput
+            *((pp + 0x28) as *mut u64) = 0xffff_fff5;            // StandardOutput
+            *((pp + 0x30) as *mut u64) = 0xffff_fff6;            // StandardError
+            *((pp + 0x38) as *mut u16) = cd_len;                 // CurrentDirectory.DosPath.Length
+            *((pp + 0x3a) as *mut u16) = cd_max;                 // .MaximumLength
+            *((pp + 0x40) as *mut u64) = cd_ptr;                 // .Buffer
+            *((pp + 0x48) as *mut u64) = 0;                      // .Handle
+            *((pp + 0x50) as *mut u16) = 0;                      // DllPath.Length
+            *((pp + 0x52) as *mut u16) = 2;                      // .MaximumLength
+            *((pp + 0x58) as *mut u64) = dll_ptr;                // .Buffer (empty)
+            *((pp + 0x60) as *mut u16) = img_len;                // ImagePathName.Length
+            *((pp + 0x62) as *mut u16) = img_max;                // .MaximumLength
+            *((pp + 0x68) as *mut u64) = img_ptr;                // .Buffer
+            *((pp + 0x70) as *mut u16) = cmd_len;                // CommandLine.Length
+            *((pp + 0x72) as *mut u16) = cmd_max;                // .MaximumLength
+            *((pp + 0x78) as *mut u64) = cmd_ptr;                // .Buffer
+            *((pp + 0x80) as *mut u64) = env_block;              // Environment (empty)
+            // The env block itself: a double NUL terminator.
+            *(env_block as *mut u16) = 0;
+            *((env_block + 2) as *mut u16) = 0;
         }
         if !fixed {
             crate::glog!("[gow] WARNING: could not map image at 0x{image_base:x}; absolute addresses may fault");
@@ -197,7 +331,7 @@ impl GowCpu {
             image_base,
             image_size: image_size as u64,
             image,
-            image_buf,
+            image_buf: Vec::new(), // owned by the shared-image registry (D015)
             stack_buf: stack,
             func_map: HashMap::new(),
             teb,
@@ -296,21 +430,21 @@ pub unsafe extern "C" fn gow_test_cc(cpu: *mut GowCpu, cc: u32) -> u64 {
     );
     let r = match cc {
         0x0 => of,                                 // O
-        0x1 => !of,                                // NO
-        0x2 => cf,                                 // B / C
-        0x3 => !cf,                                // AE / NC
-        0x4 => zf,                                 // E / Z
-        0x5 => !zf,                                // NE / NZ
-        0x6 => cf || zf,                           // BE
-        0x7 => !cf && !zf,                         // A
-        0x8 => sf,                                 // S
-        0x9 => !sf,                                // NS
-        0xa => pf,                                 // P
-        0xb => !pf,                                // NP
-        0xc => sf != of,                           // L
-        0xd => sf == of,                           // GE
-        0xe => zf || (sf != of),                   // LE
-        0xf => !zf && (sf == of),                  // G
+        0x1 => !of,                               // NO
+        0x2 => cf,                                // B / C
+        0x3 => !cf,                               // AE / NC
+        0x4 => zf,                                // E / Z
+        0x5 => !zf,                               // NE / NZ
+        0x6 => cf || zf,                          // BE
+        0x7 => !cf && !zf,                        // A
+        0x8 => sf,                                // S
+        0x9 => !sf,                               // NS
+        0xa => pf,                                // P
+        0xb => !pf,                               // NP
+        0xc => sf != of,                          // L
+        0xd => sf == of,                          // GE
+        0xe => zf || (sf != of),                  // LE
+        0xf => !zf && (sf == of),                 // G
         _ => false,
     };
     if r { 1 } else { 0 }
@@ -358,17 +492,40 @@ pub unsafe extern "C" fn gow_store(cpu: *mut GowCpu, addr: u64, v: u64, size: u3
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn gow_load128(_cpu: *mut GowCpu, addr: u64, out: *mut u8) {
+pub unsafe extern "C" fn gow_load128(cpu: *mut GowCpu, addr: u64, out: *mut u8) {
+    // Same policy as gow_load: a wild address is logged and answered with
+    // zeros instead of faulting the host. 128-bit loads were the last
+    // unvalidated guest-memory path (build #155: `movdqu xmm,[x]` with a
+    // corrupted base was a hard SIGSEGV inside the runtime).
+    if !plausible_mem(addr, 16) {
+        let c = &*cpu;
+        crate::glog!("[gow.badload] load128 addr=0x{addr:x} rva=0x{:x} rsp=0x{:x} rcx=0x{:x} rax=0x{:x}",
+            c.rip.wrapping_sub(c.image_base), c.gpr.rsp, c.gpr.rcx, c.gpr.rax);
+        std::ptr::write_bytes(out, 0, 16);
+        return;
+    }
     std::ptr::copy_nonoverlapping(addr as *const u8, out, 16);
 }
 #[no_mangle]
-pub unsafe extern "C" fn gow_store128(_cpu: *mut GowCpu, addr: u64, v: *const u8) {
+pub unsafe extern "C" fn gow_store128(cpu: *mut GowCpu, addr: u64, v: *const u8) {
+    if !plausible_mem(addr, 16) {
+        let c = &*cpu;
+        crate::glog!("[gow.badstore] store128 addr=0x{addr:x} rva=0x{:x} rsp=0x{:x} rcx=0x{:x} rax=0x{:x}",
+            c.rip.wrapping_sub(c.image_base), c.gpr.rsp, c.gpr.rcx, c.gpr.rax);
+        return;
+    }
     std::ptr::copy_nonoverlapping(v, addr as *mut u8, 16);
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn gow_load_xmm(cpu: *mut GowCpu, reg: u32, addr: u64) {
     let c = &mut *cpu;
+    if !plausible_mem(addr, 16) {
+        crate::glog!("[gow.badload] load_xmm reg={reg} addr=0x{addr:x} rva=0x{:x} rsp=0x{:x} rcx=0x{:x} rax=0x{:x}",
+            c.rip.wrapping_sub(c.image_base), c.gpr.rsp, c.gpr.rcx, c.gpr.rax);
+        c.xmm[reg as usize] = Xmm([0, 0]);
+        return;
+    }
     c.xmm[reg as usize].0[0] = (addr as *const u64).read_unaligned();
     c.xmm[reg as usize].0[1] = (addr as *const u64).add(1).read_unaligned();
 }
@@ -394,8 +551,16 @@ pub unsafe extern "C" fn gow_store_xmm(cpu: *mut GowCpu, reg: u32, addr: u64) {
 /// like 0xffffffff... or a small offset.
 #[inline]
 pub fn plausible_mem(addr: u64, len: u64) -> bool {
-    if addr < 0x1000 { return false; }
+    if addr < 0x10000 { return false; }
     if addr.checked_add(len).is_none() { return false; }
+    // Hostcall thunk pseudo-addresses (hostcall::THUNK_BASE = 0x0000_0a00_
+    // 0000_0000, one entry per 0x10): they are CALLABLE but no memory is
+    // mapped there. Since CreateFiber hands them out as handles (D019), a
+    // guest that reads through one (treating the handle as a struct pointer)
+    // would fault the host — answer 0 / log instead. 0x10000 covers 4096
+    // thunks; beyond that the range stays open (calls still dispatch through
+    // the hostcall table).
+    if (0x0000_0a00_0000_0000..0x0000_0a00_0001_0000).contains(&addr) { return false; }
     // Reject only the wild/negative canonical range: top 16 bits all ones
     // (0xffff_xxxx...) is the kernel/-1 range. Everything else (including the
     // Android 0xb400_... tagged stack/heap addresses and the guest image at
@@ -408,6 +573,11 @@ pub fn plausible_mem(addr: u64, len: u64) -> bool {
 #[no_mangle]
 pub unsafe extern "C" fn gow_pop64(cpu: *mut GowCpu) -> u64 {
     let c = &mut *cpu;
+    if !plausible_mem(c.gpr.rsp, 8) {
+        crate::glog!("[gow.badload] pop64 rsp=0x{:x} rva=0x{:x} (stack pointer wild; returning 0)",
+            c.gpr.rsp, c.rip.wrapping_sub(c.image_base));
+        return 0;
+    }
     let v = (c.gpr.rsp as *const u64).read_unaligned();
     c.gpr.rsp += 8;
     v
@@ -415,6 +585,11 @@ pub unsafe extern "C" fn gow_pop64(cpu: *mut GowCpu) -> u64 {
 #[no_mangle]
 pub unsafe extern "C" fn gow_push64(cpu: *mut GowCpu, v: u64) {
     let c = &mut *cpu;
+    if !plausible_mem(c.gpr.rsp.wrapping_sub(8), 8) {
+        crate::glog!("[gow.badstore] push64 rsp=0x{:x} rva=0x{:x} (stack pointer wild; push skipped)",
+            c.gpr.rsp, c.rip.wrapping_sub(c.image_base));
+        return;
+    }
     c.gpr.rsp -= 8;
     (c.gpr.rsp as *mut u64).write_unaligned(v);
 }
@@ -554,9 +729,19 @@ pub unsafe extern "C" fn gow_call_indirect(cpu: *mut GowCpu, target_va: u64) {
         c.next_rva = rva;
     } else {
         c.missing_indirect_calls += 1;
-        if c.missing_indirect_calls <= 64 {
-            crate::glog!("[gow.MISSCALL] indirect target_va=0x{target_va:x} (rva would be 0x{:x})",
-                target_va.wrapping_sub(c.image_base));
+        // Dedup: a retry loop hitting the same dead pointer must not flood the
+        // log (the old per-occurrence cap produced megabytes per minute on a
+        // hot error loop). Each distinct target logs once, capped at 64.
+        let should_log = {
+            let mut seen = misscall_seen().lock().unwrap();
+            seen.len() < 64 && seen.insert(target_va)
+        };
+        if should_log {
+            // Include the calling function's RVA: with the target address
+            // alone you cannot tell WHICH null vtable/import slot was called.
+            crate::glog!("[gow.MISSCALL] indirect target_va=0x{target_va:x} (rva would be 0x{:x}) from rva=0x{:x}",
+                target_va.wrapping_sub(c.image_base),
+                c.rip.wrapping_sub(c.image_base));
         }
         c.next_rva = STOP_RVA;
     }
@@ -654,6 +839,12 @@ static IMPORT_RESOLVER: std::sync::OnceLock<
 
 pub fn set_import_resolver(r: std::sync::Arc<crate::win32::ImportResolver>) {
     let _ = IMPORT_RESOLVER.set(Some(r));
+}
+
+/// The process-wide import resolver (installed once by the JNI loader).
+/// Hostcall thunks created by GetProcAddress fetch it here to dispatch by name.
+pub fn import_resolver() -> Option<std::sync::Arc<crate::win32::ImportResolver>> {
+    IMPORT_RESOLVER.get().and_then(|o| o.clone())
 }
 
 // ---------------------------------------------------------------------------
@@ -994,7 +1185,6 @@ pub unsafe extern "C" fn gow_cpuid(cpu: *mut GowCpu) {
         _ => { c.gpr.rax = 0; c.gpr.rbx = 0; c.gpr.rcx = 0; c.gpr.rdx = 0; }
     }
 }
-
 
 // ---------------------------------------------------------------------------
 // Additional SSE helpers
@@ -1374,10 +1564,20 @@ pub unsafe extern "C" fn gow_xmm_movmsk_val(cpu: *mut GowCpu, src: i32) -> u64 {
 
 #[no_mangle]
 pub unsafe extern "C" fn gow_ldmxcsr(cpu: *mut GowCpu, addr: u64) {
+    if !plausible_mem(addr, 4) {
+        crate::glog!("[gow.badload] ldmxcsr addr=0x{addr:x} rva=0x{:x}",
+            (*cpu).rip.wrapping_sub((*cpu).image_base));
+        return;
+    }
     (*cpu).mxcsr = *(addr as *const u32);
 }
 #[no_mangle]
 pub unsafe extern "C" fn gow_stmxcsr(cpu: *mut GowCpu, addr: u64) {
+    if !plausible_mem(addr, 4) {
+        crate::glog!("[gow.badstore] stmxcsr addr=0x{addr:x} rva=0x{:x}",
+            (*cpu).rip.wrapping_sub((*cpu).image_base));
+        return;
+    }
     *(addr as *mut u32) = (*cpu).mxcsr;
 }
 
@@ -1423,11 +1623,37 @@ pub unsafe extern "C" fn gow_cmps(cpu: *mut GowCpu, size: u32) {
     c.gpr.rdi = c.gpr.rdi.wrapping_add(step);
 }
 
-/// Background sampler: every 2 s, log the guest RVA the game is at, so a hang
-/// (e.g. stuck before D3D11CreateDevice) is visible without a debugger.
+/// The CPU the background sampler thread reads (set once, never cleared).
+static SAMPLER_CPU: AtomicUsize = AtomicUsize::new(0);
+
+/// Whether `cpu` is the one the background sampler keeps reading after the
+/// entry point returns. The JNI layer leaks that CPU (one per process) instead
+/// of freeing memory the sampler still touches.
+pub fn is_sampler_cpu(cpu: *const GowCpu) -> bool {
+    SAMPLER_CPU.load(Ordering::Relaxed) == cpu as usize
+}
+
+/// Resident set size in KiB (Linux/Android procfs; 0 when unavailable).
+fn rss_kb() -> u64 {
+    if let Ok(s) = std::fs::read_to_string("/proc/self/status") {
+        for line in s.lines() {
+            if let Some(rest) = line.strip_prefix("VmRSS:") {
+                let t = rest.trim().trim_end_matches("kB").trim();
+                if let Ok(v) = t.parse::<u64>() { return v; }
+            }
+        }
+    }
+    0
+}
+
+/// Background sampler: every 2 s, log the guest RVA the game is at plus the
+/// process RSS, so both a hang (e.g. stuck before D3D11CreateDevice) and a
+/// memory leak are visible without a debugger. (The guest-heap figures are
+/// logged by the allocator itself in big growth steps — see `win32.rs`.)
 fn start_sampler(cpu: *mut GowCpu) {
     static STARTED: std::sync::Once = std::sync::Once::new();
     STARTED.call_once(|| {
+        SAMPLER_CPU.store(cpu as usize, Ordering::Relaxed);
         let addr = cpu as usize;
         std::thread::spawn(move || loop {
             std::thread::sleep(std::time::Duration::from_secs(2));
@@ -1435,9 +1661,10 @@ fn start_sampler(cpu: *mut GowCpu) {
             let c = unsafe { &*cpu };
             if c.rip != 0 {
                 crate::glog!(
-                    "[gow.sample] rva=0x{:x} rsp=0x{:x} rbp=0x{:x} calls_missed={} unimpl={}",
+                    "[gow.sample] rva=0x{:x} rsp=0x{:x} rbp=0x{:x} calls_missed={} unimpl={} rss={}MiB",
                     c.rip.wrapping_sub(c.image_base), c.gpr.rsp, c.gpr.rbp,
-                    c.missing_indirect_calls, c.unimpl_hits
+                    c.missing_indirect_calls, c.unimpl_hits,
+                    rss_kb() / 1024
                 );
             }
         });
