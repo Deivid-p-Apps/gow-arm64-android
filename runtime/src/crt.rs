@@ -4,8 +4,15 @@
 //!
 //! These are called from the import resolver in `win32.rs` with the Microsoft
 //! x64 convention already decoded into `a0..a3` plus the guest stack.
+//!
+//! Pointer policy (build #155 post-mortem): once the engine's state degraded,
+//! the game called CRT string/memory functions with wild pointers (0x80 etc.)
+//! and `CStr::from_ptr`/raw copies faulted the HOST (the final SIGSEGV at
+//! 0x80). Every guest pointer dereferenced here is validated with
+//! `dispatch::plausible_mem` first; wild arguments answer with 0/empty instead
+//! of killing the process.
 
-use crate::dispatch::GowCpu;
+use crate::dispatch::{plausible_mem, GowCpu};
 
 /// Handle a CRT import by name. Returns true if handled.
 pub unsafe fn call(cpu: *mut GowCpu, func: &str) -> bool {
@@ -14,23 +21,35 @@ pub unsafe fn call(cpu: *mut GowCpu, func: &str) -> bool {
     let ret = match func {
         // --- memory (vcruntime140) ---
         "memcpy" | "memmove" => {
-            std::ptr::copy(a0 as *const u8, a1 as *mut u8, a2 as usize);
+            if plausible_mem(a0, a2) && plausible_mem(a1, a2) {
+                std::ptr::copy(a0 as *const u8, a1 as *mut u8, a2 as usize);
+            }
             a0
         }
         "memset" => {
-            std::ptr::write_bytes(a0 as *mut u8, a1 as u8, a2 as usize);
+            if plausible_mem(a0, a2) {
+                std::ptr::write_bytes(a0 as *mut u8, a1 as u8, a2 as usize);
+            }
             a0
         }
         "memcmp" => {
-            let a = std::slice::from_raw_parts(a0 as *const u8, a2 as usize);
-            let b = std::slice::from_raw_parts(a1 as *const u8, a2 as usize);
-            match a.cmp(b) { std::cmp::Ordering::Less => -1i64 as u64, std::cmp::Ordering::Equal => 0, std::cmp::Ordering::Greater => 1 }
+            if !(plausible_mem(a0, a2) && plausible_mem(a1, a2)) {
+                0
+            } else {
+                let a = std::slice::from_raw_parts(a0 as *const u8, a2 as usize);
+                let b = std::slice::from_raw_parts(a1 as *const u8, a2 as usize);
+                match a.cmp(b) { std::cmp::Ordering::Less => -1i64 as u64, std::cmp::Ordering::Equal => 0, std::cmp::Ordering::Greater => 1 }
+            }
         }
         "memchr" => {
-            let s = std::slice::from_raw_parts(a0 as *const u8, a2 as usize);
-            match s.iter().position(|&x| x == a1 as u8) {
-                Some(i) => a0 + i as u64,
-                None => 0,
+            if !plausible_mem(a0, a2) {
+                0
+            } else {
+                let s = std::slice::from_raw_parts(a0 as *const u8, a2 as usize);
+                match s.iter().position(|&x| x == a1 as u8) {
+                    Some(i) => a0 + i as u64,
+                    None => 0,
+                }
             }
         }
         // --- heap (api-ms-win-crt-heap) ---
@@ -38,7 +57,7 @@ pub unsafe fn call(cpu: *mut GowCpu, func: &str) -> bool {
         "calloc" => {
             let n = (a0 as usize).saturating_mul(a1 as usize);
             let p = crate::win32::host_alloc(n);
-            std::ptr::write_bytes(p, 0, n);
+            if !p.is_null() { std::ptr::write_bytes(p, 0, n); }
             p as u64
         }
         "realloc" => crate::win32::host_realloc(a0 as *mut u8, a1 as usize) as u64,
@@ -67,8 +86,10 @@ pub unsafe fn call(cpu: *mut GowCpu, func: &str) -> bool {
             let n = a2 as usize;
             let src = cstr(a1);
             let k = src.len().min(n.saturating_sub(1));
-            std::ptr::copy_nonoverlapping(src.as_ptr(), a0 as *mut u8, k);
-            *(a0 as *mut u8).add(k) = 0;
+            if plausible_mem(a0, k as u64 + 1) {
+                std::ptr::copy_nonoverlapping(src.as_ptr(), a0 as *mut u8, k);
+                *(a0 as *mut u8).add(k) = 0;
+            }
             0
         }
         "strncpy_s" => {
@@ -77,13 +98,17 @@ pub unsafe fn call(cpu: *mut GowCpu, func: &str) -> bool {
             let count = a3 as usize;
             let src = cstr(a2);
             let k = count.min(src.len()).min(destsz.saturating_sub(1));
-            std::ptr::copy_nonoverlapping(src.as_ptr(), a0 as *mut u8, k);
-            *(a0 as *mut u8).add(k) = 0;
+            if plausible_mem(a0, k as u64 + 1) {
+                std::ptr::copy_nonoverlapping(src.as_ptr(), a0 as *mut u8, k);
+                *(a0 as *mut u8).add(k) = 0;
+            }
             0
         }
         "memcpy_s" => {
             let (dest, destsz, src, count) = (a0, a1 as usize, a2, a3 as usize);
-            if count <= destsz { std::ptr::copy_nonoverlapping(src as *const u8, dest as *mut u8, count); }
+            if count <= destsz && plausible_mem(dest, count as u64) && plausible_mem(src, count as u64) {
+                std::ptr::copy_nonoverlapping(src as *const u8, dest as *mut u8, count);
+            }
             0
         }
         "wcsncpy_s" | "wcscpy_s" | "wcsncat_s" | "wcscat_s" | "strncat_s" | "strcat_s" => 0,
@@ -114,8 +139,10 @@ pub unsafe fn call(cpu: *mut GowCpu, func: &str) -> bool {
         "_strdup" | "_wcsdup" => {
             let s = cstr(a0);
             let p = crate::win32::host_alloc(s.len() + 1);
-            std::ptr::copy_nonoverlapping(s.as_ptr(), p, s.len());
-            *p.add(s.len()) = 0;
+            if !p.is_null() {
+                std::ptr::copy_nonoverlapping(s.as_ptr(), p, s.len());
+                *p.add(s.len()) = 0;
+            }
             p as u64
         }
         "_strlwr" => { let s = cstr(a0).to_lowercase(); write_cstr_at(a0, &s); a0 }
@@ -133,7 +160,9 @@ pub unsafe fn call(cpu: *mut GowCpu, func: &str) -> bool {
             // (value, buffer, radix)
             let mut buf = match a2 as u32 { 16 => format!("{:x}", a0 as i64), 8 => format!("{:o}", a0 as i64), _ => format!("{}", a0 as i64) };
             buf.push('\0');
-            std::ptr::copy_nonoverlapping(buf.as_ptr(), a1 as *mut u8, buf.len());
+            if plausible_mem(a1, buf.len() as u64) {
+                std::ptr::copy_nonoverlapping(buf.as_ptr(), a1 as *mut u8, buf.len());
+            }
             a1
         }
         // --- math ---
@@ -180,7 +209,7 @@ pub unsafe fn call(cpu: *mut GowCpu, func: &str) -> bool {
         // --- time ---
         "_time64" => {
             let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-            if a0 != 0 { *(a0 as *mut i64) = t as i64; }
+            if plausible_mem(a0, 8) { *(a0 as *mut i64) = t as i64; }
             t
         }
         // --- C/C++ startup: run static initializers (the path to main) ---
@@ -189,6 +218,7 @@ pub unsafe fn call(cpu: *mut GowCpu, func: &str) -> bool {
             let end = a1;
             let mut count = 0u64;
             while p + 8 <= end {
+                if !plausible_mem(p, 8) { break; }
                 let fva = *(p as *const u64);
                 if fva != 0 {
                     call_guest(cpu, fva);
@@ -210,7 +240,9 @@ pub unsafe fn call(cpu: *mut GowCpu, func: &str) -> bool {
         "_get_narrow_winmain_command_line" => {
             let s = b"GoW.exe\0";
             let p = crate::win32::host_alloc(s.len());
-            std::ptr::copy_nonoverlapping(s.as_ptr(), p, s.len());
+            if !p.is_null() {
+                std::ptr::copy_nonoverlapping(s.as_ptr(), p, s.len());
+            }
             p as u64
         }
         "_initialize_narrow_environment" | "_configure_narrow_argv" => 0,
@@ -228,7 +260,7 @@ pub unsafe fn call(cpu: *mut GowCpu, func: &str) -> bool {
             // (base, count, width, compare). Insertion sort using the guest
             // comparator (a function pointer we call back into).
             let (base, count, width, cmp) = (a0, a1 as usize, a2 as usize, a3);
-            if width != 0 && count > 1 {
+            if width != 0 && count > 1 && plausible_mem(base, count.saturating_mul(width) as u64) {
                 for i in 1..count {
                     let mut j = i;
                     while j > 0 {
@@ -251,9 +283,10 @@ pub unsafe fn call(cpu: *mut GowCpu, func: &str) -> bool {
             // Save the guest state into the jmp_buf. Layout (our own, 64 bytes):
             // [0..8)=RSP after return, [8..16)=return RVA, [16..144)=GPRs.
             let buf = a0;
+            if !plausible_mem(buf, 152) { c.gpr.rax = 0; return true; }
             // The return RVA is the value just pushed by the guest call; read the
             // caller's return address from the guest stack top.
-            let ret_addr_va = *((c.gpr.rsp + 8) as *const u64);
+            let ret_addr_va = if plausible_mem(c.gpr.rsp + 8, 8) { *((c.gpr.rsp + 8) as *const u64) } else { 0 };
             *(buf as *mut u64) = c.gpr.rsp + 16; // resume stack
             *((buf as *mut u8).add(8) as *mut u64) = ret_addr_va;
             let gprs = (buf as *mut u8).add(16) as *mut u64;
@@ -266,6 +299,7 @@ pub unsafe fn call(cpu: *mut GowCpu, func: &str) -> bool {
         }
         "longjmp" | "_longjmp" => {
             let buf = a0;
+            if !plausible_mem(buf, 16) { c.gpr.rax = 1; return true; }
             let val = if a1 == 0 { 1 } else { a1 };
             c.gpr.rsp = *(buf as *const u64);
             c.gpr.rax = val;
@@ -314,9 +348,27 @@ unsafe fn spawn_guest_thread(cpu: *mut GowCpu, start_va: u64, arg: u64) {
     });
 }
 
+/// Read a guest C string. Wild pointers (null page, kernel range, wrap-around)
+/// return an empty string instead of faulting the host: after the engine's
+/// state degraded (build #155) the game called CRT string functions with
+/// pointers like 0x80 — `CStr::from_ptr(0x80)` was the SIGSEGV at 0x80.
 fn cstr(ptr: u64) -> String {
-    if ptr == 0 { return String::new(); }
-    unsafe { std::ffi::CStr::from_ptr(ptr as *const std::os::raw::c_char).to_string_lossy().into_owned() }
+    if !plausible_mem(ptr, 1) { return String::new(); }
+    unsafe {
+        // Byte-wise scan with a per-byte plausibility guard: even a
+        // plausible-but-unmapped pointer cannot crash the host here.
+        let mut v = Vec::new();
+        let mut p = ptr as *const u8;
+        loop {
+            if !plausible_mem(p as u64, 1) { break; }
+            let ch = *p;
+            if ch == 0 { break; }
+            v.push(ch);
+            p = p.add(1);
+            if v.len() > 4096 { break; }
+        }
+        String::from_utf8_lossy(&v).into_owned()
+    }
 }
 
 /// Call a guest function (by absolute VA) with two args, returning its RAX as
@@ -347,16 +399,19 @@ fn swap_bytes(a: u64, b: u64, n: usize) {
 
 unsafe fn unsafe_copy_cstr(dst: u64, src: u64) {
     let s = cstr(src);
+    if !plausible_mem(dst, s.len() as u64 + 1) { return; }
     std::ptr::copy_nonoverlapping(s.as_ptr(), dst as *mut u8, s.len());
     *(dst as *mut u8).add(s.len()) = 0;
 }
 unsafe fn unsafe_copy_cstr_n(dst: u64, src: u64, n: usize) {
     let s = cstr(src);
     let k = s.len().min(n);
+    if !plausible_mem(dst, n as u64) { return; }
     std::ptr::copy_nonoverlapping(s.as_ptr(), dst as *mut u8, k);
     for i in k..n { *(dst as *mut u8).add(i) = 0; }
 }
 fn write_cstr_at(ptr: u64, s: &str) {
+    if !plausible_mem(ptr, s.len() as u64 + 1) { return; }
     unsafe {
         std::ptr::copy_nonoverlapping(s.as_ptr(), ptr as *mut u8, s.len());
         *(ptr as *mut u8).add(s.len()) = 0;

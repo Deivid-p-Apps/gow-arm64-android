@@ -101,6 +101,23 @@ fn alloc_guest_block(size: usize) -> *mut u8 {
     unsafe { std::alloc::alloc_zeroed(layout) }
 }
 
+/// Write `s` as UTF-16 (plus NUL) at `base + *off` inside a TEB/PEB scratch
+/// area; returns (pointer, Length in bytes, MaximumLength in bytes) for an
+/// RTL_USER_PROCESS_PARAMETERS UNICODE_STRING. Advances `*off`.
+fn put_wide(base: u64, off: &mut usize, s: &str) -> (u64, u16, u16) {
+    let p = base + *off as u64;
+    let mut n = 0u16;
+    unsafe {
+        for ch in s.encode_utf16() {
+            *((p + n as u64 * 2) as *mut u16) = ch;
+            n += 1;
+        }
+        *((p + n as u64 * 2) as *mut u16) = 0;
+    }
+    *off += (n as usize + 1) * 2;
+    (p, n * 2, (n + 1) * 2)
+}
+
 /// Map `size` bytes at the fixed address `base` (MAP_FIXED). Returns
 /// (pointer, owned Vec, whether mapping succeeded). On failure, falls back to a
 /// normal Vec so the program still runs (with a logged warning).
@@ -204,18 +221,33 @@ impl GowCpu {
         // holds a return address and callers' frames live at higher addresses.
         // Starting exactly at the buffer end makes writes like [rsp+8] fault.
         let rsp = unsafe { stack.as_mut_ptr().add(stack.len() - 0x8000) as u64 };
-        // Allocate a real TEB/PEB/TLS block so gs:/fs: accesses land on valid memory.
-        // Windows x64 TEB layout used here:
-        //   0x30 -> PEB (Self)
+        // Allocate a real TEB/PEB/TLS block so gs:/fs: accesses land on valid
+        // memory. Windows x64 TEB layout used here (corrected, build #155
+        // post-mortem: the PEB used to live at +0x30 and +0x60 stayed zero, so
+        // every `gs:[0x60]` PEB walk dereferenced NULL — the [0x40]/[0x60]/
+        // [0x80] small-offset badload family):
+        //   0x08/0x10 -> NtTib.StackBase/StackLimit
+        //   0x30 -> NtTib.Self (the TEB itself)
+        //   0x38 -> EnvironmentPointer
+        //   0x40/0x48 -> ClientId (process/thread id)
         //   0x58 -> ThreadLocalStoragePointer (array of TLS slot values)
-        //   0x148.. -> TlsSlots[64] (inline TLS storage)
+        //   0x60 -> ProcessEnvironmentBlock
+        //   0x148.. -> TlsSlots[64] (inline TLS storage, internal layout)
         let mut teb_buf = vec![0u8; 0x14000];
         let teb = teb_buf.as_mut_ptr() as u64;
         let peb = teb + 0x8000;
         let tls_ptr = teb + 0xC000; // TLS pointer array (distinct from PEB at +0x8000)
         unsafe {
-            *((teb + 0x30) as *mut u64) = peb;         // TEB->PEB
-            *((peb + 0x10) as *mut u64) = image_base;  // PEB->ImageBaseAddress
+            let stack_lo = stack.as_ptr() as u64;
+            let stack_hi = stack_lo + stack.len() as u64;
+            *((teb + 0x08) as *mut u64) = stack_hi;              // NtTib.StackBase
+            *((teb + 0x10) as *mut u64) = stack_lo;              // NtTib.StackLimit
+            *((teb + 0x30) as *mut u64) = teb;                   // NtTib.Self
+            let env_block = teb + 0x1400;                        // empty env block (L"\0\0")
+            *((teb + 0x38) as *mut u64) = env_block;             // EnvironmentPointer
+            *((teb + 0x40) as *mut u64) = std::process::id() as u64; // ClientId.ProcessId
+            *((teb + 0x48) as *mut u64) = crate::win32::tid();   // ClientId.ThreadId
+            *((teb + 0x60) as *mut u64) = peb;                   // ProcessEnvironmentBlock
             // 128 TLS slots. Each slot must point at a REAL per-module TLS block
             // (Windows' loader allocates one per module index). A null slot makes
             // code like `mov rax,[gs:0x58]; mov rdx,[rax]; mov [rdx+0x80],..` fault.
@@ -227,8 +259,59 @@ impl GowCpu {
                     *((tls_ptr + i * 8) as *mut u64) = blk as u64;
                 }
             }
-            *((teb + 0x58) as *mut u64) = tls_ptr;     // TEB->ThreadLocalStoragePointer
+            *((teb + 0x58) as *mut u64) = tls_ptr;               // ThreadLocalStoragePointer
             // Inline TlsSlots array at 0x148 (already zeroed).
+
+            // --- PEB ---
+            *((peb + 0x10) as *mut u64) = image_base;            // ImageBaseAddress
+            *((peb + 0x18) as *mut u64) = peb + 0x100;           // Ldr
+            *((peb + 0x20) as *mut u64) = teb + 0x1000;          // ProcessParameters
+            *((peb + 0x30) as *mut u64) = 0xdead_0001;           // ProcessHeap (matches GetProcessHeap)
+            // PEB_LDR_DATA at peb+0x100 with self-linked empty list heads:
+            // module enumeration finds zero modules instead of faulting on NULL.
+            let ldr = peb + 0x100;
+            *(ldr as *mut u32) = 0x30;                           // Length
+            *((ldr + 0x04) as *mut u32) = 1;                     // Initialized
+            for off in [0x10u64, 0x20, 0x30] {
+                *((ldr + off) as *mut u64) = ldr + off;          // Flink = self
+                *((ldr + off + 8) as *mut u64) = ldr + off;      // Blink = self
+            }
+            // --- RTL_USER_PROCESS_PARAMETERS at teb+0x1000 ---
+            // x64 offsets: +0x00 MaximumLength/Length, +0x08 Flags,
+            // +0x20/+0x28/+0x30 Standard handles, +0x38 CURDIR
+            // (UNICODE_STRING + Handle), +0x50 DllPath, +0x60 ImagePathName,
+            // +0x70 CommandLine, +0x80 Environment. A NULL ProcessParameters
+            // left CRT/engine walkers dereferencing NULL+small.
+            let pp = teb + 0x1000;
+            let strs = teb + 0x1100;
+            let mut so = 0usize;
+            let (cd_ptr, cd_len, cd_max) = put_wide(strs, &mut so, "C:\\");
+            let (dll_ptr, _, _) = put_wide(strs, &mut so, "");
+            let (img_ptr, img_len, img_max) = put_wide(strs, &mut so, "C:\\GoW.exe");
+            let (cmd_ptr, cmd_len, cmd_max) = put_wide(strs, &mut so, "GoW.exe");
+            *((pp + 0x00) as *mut u32) = 0x90;                   // MaximumLength
+            *((pp + 0x04) as *mut u32) = 0x90;                   // Length
+            *((pp + 0x08) as *mut u32) = 0;                      // Flags
+            *((pp + 0x20) as *mut u64) = 0xffff_fff4;            // StandardInput
+            *((pp + 0x28) as *mut u64) = 0xffff_fff5;            // StandardOutput
+            *((pp + 0x30) as *mut u64) = 0xffff_fff6;            // StandardError
+            *((pp + 0x38) as *mut u16) = cd_len;                 // CurrentDirectory.DosPath.Length
+            *((pp + 0x3a) as *mut u16) = cd_max;                 // .MaximumLength
+            *((pp + 0x40) as *mut u64) = cd_ptr;                 // .Buffer
+            *((pp + 0x48) as *mut u64) = 0;                      // .Handle
+            *((pp + 0x50) as *mut u16) = 0;                      // DllPath.Length
+            *((pp + 0x52) as *mut u16) = 2;                      // .MaximumLength
+            *((pp + 0x58) as *mut u64) = dll_ptr;                // .Buffer (empty)
+            *((pp + 0x60) as *mut u16) = img_len;                // ImagePathName.Length
+            *((pp + 0x62) as *mut u16) = img_max;                // .MaximumLength
+            *((pp + 0x68) as *mut u64) = img_ptr;                // .Buffer
+            *((pp + 0x70) as *mut u16) = cmd_len;                // CommandLine.Length
+            *((pp + 0x72) as *mut u16) = cmd_max;                // .MaximumLength
+            *((pp + 0x78) as *mut u64) = cmd_ptr;                // .Buffer
+            *((pp + 0x80) as *mut u64) = env_block;              // Environment (empty)
+            // The env block itself: a double NUL terminator.
+            *(env_block as *mut u16) = 0;
+            *((env_block + 2) as *mut u16) = 0;
         }
         if !fixed {
             crate::glog!("[gow] WARNING: could not map image at 0x{image_base:x}; absolute addresses may fault");
@@ -409,17 +492,40 @@ pub unsafe extern "C" fn gow_store(cpu: *mut GowCpu, addr: u64, v: u64, size: u3
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn gow_load128(_cpu: *mut GowCpu, addr: u64, out: *mut u8) {
+pub unsafe extern "C" fn gow_load128(cpu: *mut GowCpu, addr: u64, out: *mut u8) {
+    // Same policy as gow_load: a wild address is logged and answered with
+    // zeros instead of faulting the host. 128-bit loads were the last
+    // unvalidated guest-memory path (build #155: `movdqu xmm,[x]` with a
+    // corrupted base was a hard SIGSEGV inside the runtime).
+    if !plausible_mem(addr, 16) {
+        let c = &*cpu;
+        crate::glog!("[gow.badload] load128 addr=0x{addr:x} rva=0x{:x} rsp=0x{:x} rcx=0x{:x} rax=0x{:x}",
+            c.rip.wrapping_sub(c.image_base), c.gpr.rsp, c.gpr.rcx, c.gpr.rax);
+        std::ptr::write_bytes(out, 0, 16);
+        return;
+    }
     std::ptr::copy_nonoverlapping(addr as *const u8, out, 16);
 }
 #[no_mangle]
-pub unsafe extern "C" fn gow_store128(_cpu: *mut GowCpu, addr: u64, v: *const u8) {
+pub unsafe extern "C" fn gow_store128(cpu: *mut GowCpu, addr: u64, v: *const u8) {
+    if !plausible_mem(addr, 16) {
+        let c = &*cpu;
+        crate::glog!("[gow.badstore] store128 addr=0x{addr:x} rva=0x{:x} rsp=0x{:x} rcx=0x{:x} rax=0x{:x}",
+            c.rip.wrapping_sub(c.image_base), c.gpr.rsp, c.gpr.rcx, c.gpr.rax);
+        return;
+    }
     std::ptr::copy_nonoverlapping(v, addr as *mut u8, 16);
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn gow_load_xmm(cpu: *mut GowCpu, reg: u32, addr: u64) {
     let c = &mut *cpu;
+    if !plausible_mem(addr, 16) {
+        crate::glog!("[gow.badload] load_xmm reg={reg} addr=0x{addr:x} rva=0x{:x} rsp=0x{:x} rcx=0x{:x} rax=0x{:x}",
+            c.rip.wrapping_sub(c.image_base), c.gpr.rsp, c.gpr.rcx, c.gpr.rax);
+        c.xmm[reg as usize] = Xmm([0, 0]);
+        return;
+    }
     c.xmm[reg as usize].0[0] = (addr as *const u64).read_unaligned();
     c.xmm[reg as usize].0[1] = (addr as *const u64).add(1).read_unaligned();
 }
@@ -459,6 +565,11 @@ pub fn plausible_mem(addr: u64, len: u64) -> bool {
 #[no_mangle]
 pub unsafe extern "C" fn gow_pop64(cpu: *mut GowCpu) -> u64 {
     let c = &mut *cpu;
+    if !plausible_mem(c.gpr.rsp, 8) {
+        crate::glog!("[gow.badload] pop64 rsp=0x{:x} rva=0x{:x} (stack pointer wild; returning 0)",
+            c.gpr.rsp, c.rip.wrapping_sub(c.image_base));
+        return 0;
+    }
     let v = (c.gpr.rsp as *const u64).read_unaligned();
     c.gpr.rsp += 8;
     v
@@ -466,6 +577,11 @@ pub unsafe extern "C" fn gow_pop64(cpu: *mut GowCpu) -> u64 {
 #[no_mangle]
 pub unsafe extern "C" fn gow_push64(cpu: *mut GowCpu, v: u64) {
     let c = &mut *cpu;
+    if !plausible_mem(c.gpr.rsp.wrapping_sub(8), 8) {
+        crate::glog!("[gow.badstore] push64 rsp=0x{:x} rva=0x{:x} (stack pointer wild; push skipped)",
+            c.gpr.rsp, c.rip.wrapping_sub(c.image_base));
+        return;
+    }
     c.gpr.rsp -= 8;
     (c.gpr.rsp as *mut u64).write_unaligned(v);
 }
@@ -1441,10 +1557,20 @@ pub unsafe extern "C" fn gow_xmm_movmsk_val(cpu: *mut GowCpu, src: i32) -> u64 {
 
 #[no_mangle]
 pub unsafe extern "C" fn gow_ldmxcsr(cpu: *mut GowCpu, addr: u64) {
+    if !plausible_mem(addr, 4) {
+        crate::glog!("[gow.badload] ldmxcsr addr=0x{addr:x} rva=0x{:x}",
+            (*cpu).rip.wrapping_sub((*cpu).image_base));
+        return;
+    }
     (*cpu).mxcsr = *(addr as *const u32);
 }
 #[no_mangle]
 pub unsafe extern "C" fn gow_stmxcsr(cpu: *mut GowCpu, addr: u64) {
+    if !plausible_mem(addr, 4) {
+        crate::glog!("[gow.badstore] stmxcsr addr=0x{addr:x} rva=0x{:x}",
+            (*cpu).rip.wrapping_sub((*cpu).image_base));
+        return;
+    }
     *(addr as *mut u32) = (*cpu).mxcsr;
 }
 
