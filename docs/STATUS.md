@@ -45,7 +45,9 @@ Motorola Edge 30 Fusion (`tundra`), SM8350 (Snapdragon 888+), Adreno 725 (Turnip
       ptr -> tamanho/alinhamento; `free`/`HeapFree`/`HeapReAlloc`/`VirtualFree`
       devolvem memória de verdade; teto `GOW_HEAP_MB` (default 3072 MiB) com
       falha explícita em vez de OOM-kill; heap reporta crescimento em bandas de
-      128 MiB e o sampler de 2 s exibe o RSS do processo
+      128 MiB e o sampler de 2 s exibe o RSS do processo; blocos >= 32 MiB saem
+      de mmap(MAP_NORESERVE) — commit lazy estilo Windows, teto separado
+      `GOW_RESERVE_MB` — para a arena multi-GiB do motor (D017)
 - [x] `runtime`: **`LoadLibrary`/`GetProcAddress` dinâmicos** (D014):
       pseudo-módulos para qualquer DLL e thunks hostcall que empacotam os
       argumentos MS x64 — `D3D11CreateDevice`/`CreateDXGIFactory1` resolvidos
@@ -120,6 +122,25 @@ Motorola Edge 30 Fusion (`tundra`), SM8350 (Snapdragon 888+), Adreno 725 (Turnip
 - **MapViewOfFile copiava o arquivo inteiro para a RAM** (D016): packs de GBs
   iam integralmente para memória e nunca saíam. Agora mmap MAP_PRIVATE +
   UnmapViewOfFile real (munmap), com fallback para o caminho antigo.
+- **Arena multi-GiB recusada pelo teto do heap** (D017): o motor reserva uma
+  arena enorme no boot (uma única alocação >= 3 GiB — o "budget exceeded:
+  0 MiB live" do log, com o heap ainda vazio). Com NULL em mãos, o boot
+  prosseguiu a partir de um heap nulo: cascata de `[gow.badstore]`/
+  `[gow.badload]` em endereços negativos e SIGSEGV fatal em 0x80 dentro do
+  runtime ao ler um nome de módulo ("KERNEL32.dll" ainda quente nos
+  registradores x6/x7). Agora blocos >= 32 MiB saem de mmap(MAP_NORESERVE):
+  o espaço de endereços é reservado, páginas zeradas chegam no primeiro toque
+  (commit lazy como no Windows), o RSS cresce só com o que o jogo usa, e um
+  teto separado `GOW_RESERVE_MB` (default 8192) se aplica; o log de recusa
+  agora inclui o tamanho pedido. No mesmo commit: `GetThreadId` e
+  `DuplicateHandle` implementados (o CRT chama os dois no boot);
+  `GetCurrentThreadId` é estável por thread (o contador antigo devolvia um id
+  NOVO a cada chamada, crescendo caches por-thread sem limite);
+  `GetModuleHandleEx*` trata GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS (RDX é
+  endereço, não string); `VirtualAlloc` com dwSize == 0 sobre uma reserva
+  existente devolve a base (commit sobre reserva); `read_cstr` rejeita
+  ponteiros selvagens (página nula / faixa kernel) em vez de derrubar o
+  processo; MISSCALL agora loga o RVA do ponto de chamada.
 
 ## Próximos passos
 1. Fechar a cobertura do lifter (69 mnemônicos).
