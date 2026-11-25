@@ -9,10 +9,14 @@
 //! Only functions actually implemented here are dispatched; anything unknown is
 //! counted and logged, never silently faked.
 //!
-//! Heap policy (D013): every allocation is tracked (ptr -> size/align) so
-//! free/HeapFree/HeapReAlloc/VirtualFree actually return memory, with a hard
-//! budget (`GOW_HEAP_MB`, default 3072 MiB) so the process fails loudly instead
-//! of being OOM-killed by Android. Module policy (D014): LoadLibrary hands out
+//! Heap policy (D013/D017): every allocation is tracked (ptr -> size/align) so
+//! free/HeapFree/HeapReAlloc/VirtualFree actually return memory. Small blocks
+//! come from a committed budget (`GOW_HEAP_MB`, default 3072 MiB); blocks of
+//! 32 MiB or more are mmap'd with MAP_NORESERVE instead, so a multi-GiB engine
+//! arena reserves address space and materialises zeroed pages on first touch
+//! (Windows-like lazy commit) instead of being refused — a refused arena left
+//! the game booting from NULL and crashing with wild pointers.
+//! Module policy (D014): LoadLibrary hands out
 //! pseudo-module handles and GetProcAddress serves hostcall thunks (DXVK Native
 //! for d3d11/dxgi/d3dcompiler), so games that resolve D3D11 dynamically work.
 
@@ -92,9 +96,19 @@ impl ImportResolver {
         let handled = match (dll_l.as_str(), func) {
             ("kernel32.dll", "VirtualAlloc") => {
                 // Fresh zeroed pages, tracked so VirtualFree can release them
-                // (D013). The requested base address is ignored; the returned
-                // pointer is the allocation base the guest works with.
-                let p = if a1 == 0 { std::ptr::null_mut() } else { host_alloc_pages(a1 as usize) };
+                // (D013); reservations of 32 MiB+ are mmap'd lazily (D017), so
+                // the engine's multi-GiB boot arena no longer comes back NULL.
+                // lpAddress != 0 with dwSize == 0 is MEM_COMMIT over an
+                // existing reservation: the mapping is already RW, so the base
+                // itself is the answer (returning NULL here failed boot-time
+                // commits).
+                let p = if a1 != 0 {
+                    host_alloc_pages(a1 as usize)
+                } else if a0 != 0 && (heap_size_raw(a0 as *mut u8) != 0 || heap_block_containing(a0).is_some()) {
+                    a0 as *mut u8
+                } else {
+                    std::ptr::null_mut()
+                };
                 c.gpr.rax = p as u64;
                 true
             }
@@ -126,15 +140,23 @@ impl ImportResolver {
             }
             ("kernel32.dll", "GetModuleHandleExA") | ("kernel32.dll", "GetModuleHandleExW") => {
                 // (flags, name, out): name in RDX, handle out in R8.
-                let name = read_cstr(a1, func.ends_with('W'));
-                let h = if name.is_empty() {
-                    c.image_base
+                // GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS (0x4): RDX is an
+                // address inside the module, NOT a string — the old code read
+                // it as one and registered garbage pseudo-modules.
+                const FROM_ADDRESS: u64 = 0x4;
+                let h = if a0 & FROM_ADDRESS != 0 {
+                    if a1 >= c.image_base && a1 < c.image_base + c.image_size { c.image_base } else { 0 }
                 } else {
-                    let b = dll_basename(&name);
-                    if b.ends_with(".exe") { c.image_base } else { module_handle_for(&b) }
+                    let name = read_cstr(a1, func.ends_with('W'));
+                    if name.is_empty() {
+                        c.image_base
+                    } else {
+                        let b = dll_basename(&name);
+                        if b.ends_with(".exe") { c.image_base } else { module_handle_for(&b) }
+                    }
                 };
                 if a2 != 0 { *(a2 as *mut u64) = h; }
-                c.gpr.rax = 1;
+                c.gpr.rax = if h != 0 { 1 } else { 0 };
                 true
             }
             ("kernel32.dll", "GetProcAddress") => {
@@ -142,6 +164,13 @@ impl ImportResolver {
                 true
             }
             ("kernel32.dll", "GetCurrentThreadId") => { c.gpr.rax = tid(); true }
+            ("kernel32.dll", "GetThreadId") => {
+                // The stable id behind a CreateThread handle (D017): the CRT and
+                // the engine's job system ask for this right after spawning;
+                // 0 (the old unimplemented answer) made them take error paths.
+                c.gpr.rax = self.threads.thread_id(a0);
+                true
+            }
             ("kernel32.dll", "GetCurrentProcessId") => { c.gpr.rax = std::process::id() as u64; true }
             ("kernel32.dll", "QueryPerformanceCounter") => {
                 if a0 != 0 { *(a0 as *mut u64) = qpc(); }
@@ -482,6 +511,21 @@ impl ImportResolver {
                 true
             }
             ("kernel32.dll", "GetCurrentThread") | ("kernel32.dll", "GetCurrentProcess") => { c.gpr.rax = 0xffff_ffff_ffff_ffff; true }
+            ("kernel32.dll", "DuplicateHandle") => {
+                // (hSrcProcess, hSource, hTargetProcess, lpTarget, access,
+                // inherit, options): the CRT/engine pattern duplicates a handle
+                // within the same process. Our handles are table keys, so the
+                // duplicate is the same value; DUPLICATE_CLOSE_SOURCE (0x1,
+                // 7th argument at [rsp+0x38]) additionally closes the source.
+                let a6 = *(arg(2) as *const u64);
+                let ok = a1 != 0;
+                if ok {
+                    if a3 != 0 { *(a3 as *mut u64) = a1; }
+                    if a6 & 1 != 0 { self.files.close(a1); }
+                }
+                c.gpr.rax = ok as u64;
+                true
+            }
             ("kernel32.dll", "SwitchToThread") | ("kernel32.dll", "YieldProcessor") => { c.gpr.rax = 1; true }
             ("kernel32.dll", "VirtualProtect") => { if a3 != 0 { *(a3 as *mut u32) = 0x40; } c.gpr.rax = 1; true }
             ("kernel32.dll", "VirtualQuery") => {
@@ -770,7 +814,12 @@ impl Default for ImportResolver {
 }
 
 unsafe fn read_cstr(ptr: u64, wide: bool) -> String {
-    if ptr == 0 { return String::new(); }
+    // Never dereference a wild pointer here: after a failed boot allocation
+    // the game passes garbage module/path pointers (device log: fatal SIGSEGV
+    // at 0x80 inside the runtime with "KERNEL32.dll" still warm in x6/x7).
+    // Reject the null page and the kernel/-1 range — the same policy as
+    // `plausible_mem` — and let callers see an empty string instead.
+    if ptr < 0x1_0000 || (ptr >> 48) == 0xffff { return String::new(); }
     if wide {
         let mut v = Vec::new();
         let mut p = ptr as *const u16;
@@ -785,7 +834,8 @@ unsafe fn read_cstr(ptr: u64, wide: bool) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Tracked heap: real alloc/free with a size table (D013)
+// Tracked heap: real alloc/free with a size table (D013) + lazy mmap for big
+// reservations (D017)
 // ---------------------------------------------------------------------------
 //
 // The first Win32 layer used a "bump" allocator that rounded every allocation
@@ -794,9 +844,35 @@ unsafe fn read_cstr(ptr: u64, wide: bool) -> String {
 // ballooned until Android's LMK killed it — the "eats all RAM and closes"
 // symptom from the device logs. This table trades one hash lookup per
 // alloc/free for correct lifetimes and a hard ceiling.
+//
+// D017: the ceiling itself caused the next crash. The engine reserves one
+// multi-GiB arena at boot (a single HeapAlloc/_aligned_malloc/VirtualAlloc of
+// >= 3072 MiB — seen in the log as "budget exceeded: 0 MiB live" with an
+// otherwise empty heap). Refusing it left the game running from a NULL arena,
+// which surfaced as the [gow.badstore]/[gow.badload] cascade of negative wild
+// addresses and the final SIGSEGV at 0x80 while reading a module name. Blocks
+// of MMAP_MIN or more are now served by mmap(MAP_NORESERVE): the reservation
+// only occupies address space, zeroed pages arrive on first touch
+// (Windows-like lazy commit), RSS grows with what the game actually uses, and
+// a separate, higher reservation cap applies.
 
 #[derive(Clone, Copy)]
-struct Block { size: usize, align: usize }
+struct Block { size: usize, align: usize, mmap: bool }
+
+#[cfg(unix)]
+extern "C" {
+    fn mmap(addr: *mut u8, len: usize, prot: i32, flags: i32, fd: i32, off: i64) -> *mut u8;
+    fn munmap(addr: *mut u8, len: usize) -> i32;
+}
+#[cfg(unix)]
+mod sys {
+    pub const PROT_READ: i32 = 1;
+    pub const PROT_WRITE: i32 = 2;
+    pub const MAP_PRIVATE: i32 = 0x02;
+    pub const MAP_ANONYMOUS: i32 = 0x20;
+    pub const MAP_NORESERVE: i32 = 0x4000;
+    pub const MAP_FAILED: isize = -1;
+}
 
 /// Pointer hasher that skips SipHash (alloc/free are too hot for it).
 #[derive(Default)]
@@ -820,8 +896,16 @@ static LIVE_BYTES: AtomicUsize = AtomicUsize::new(0);
 static LIVE_BLOCKS: AtomicUsize = AtomicUsize::new(0);
 static PEAK_BYTES: AtomicUsize = AtomicUsize::new(0);
 static REFUSED: AtomicU64 = AtomicU64::new(0);
+/// Bytes reserved through lazy mmap blocks (address space, not committed).
+static RESERVED_BYTES: AtomicUsize = AtomicUsize::new(0);
 /// Last 128 MiB band of live bytes that was reported in the log.
 static HEAP_BAND: AtomicUsize = AtomicUsize::new(0);
+/// Last 128 MiB band of reserved bytes that was reported in the log.
+static RESERVED_BAND: AtomicUsize = AtomicUsize::new(0);
+
+/// Blocks of at least this size are mmap'd (lazy zero pages) instead of
+/// committed through the allocator (D017).
+const MMAP_MIN: usize = 32 * 1024 * 1024;
 
 /// Total guest-heap budget. Past the ceiling allocations return NULL (the game
 /// sees an OOM and takes its own error path) instead of the kernel killing us.
@@ -836,10 +920,26 @@ fn heap_budget() -> usize {
     })
 }
 
+/// Cap on *reserved* (mmap'd, lazily committed) bytes — intentionally much
+/// higher than the committed budget: reserved pages only become RSS when the
+/// game touches them. Override with `GOW_RESERVE_MB` (default 8192).
+fn reserve_budget() -> usize {
+    static B: OnceLock<usize> = OnceLock::new();
+    *B.get_or_init(|| {
+        std::env::var("GOW_RESERVE_MB")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .unwrap_or(8192) * 1024 * 1024
+    })
+}
+
 /// (live bytes, live blocks, peak bytes) — diagnostics for tests/sampler.
 pub fn heap_stats() -> (usize, usize, usize) {
     (LIVE_BYTES.load(Ordering::Relaxed), LIVE_BLOCKS.load(Ordering::Relaxed), PEAK_BYTES.load(Ordering::Relaxed))
 }
+
+/// Reserved (mmap'd, lazy) bytes — diagnostics for the sampler.
+pub fn heap_reserved() -> usize { RESERVED_BYTES.load(Ordering::Relaxed) }
 
 const PAGE: usize = 0x1000;
 
@@ -849,13 +949,21 @@ fn heap_alloc_raw(size: usize, align: usize, page: bool) -> *mut u8 {
     } else {
         ((((size.saturating_add(0xf)) / 0x10) * 0x10).max(0x10), align.max(0x10))
     };
+    // D017: a big request is the engine's arena, not a leak. Reserve address
+    // space with lazy zero pages; fall through to the committed path only if
+    // mmap is unavailable (non-unix) or the reservation cap refuses it.
+    if size >= MMAP_MIN && align <= PAGE {
+        let p = mmap_reserve(size);
+        if !p.is_null() { return p; }
+    }
     let live = LIVE_BYTES.fetch_add(size, Ordering::Relaxed) + size;
     if live > heap_budget() {
         LIVE_BYTES.fetch_sub(size, Ordering::Relaxed);
         let n = REFUSED.fetch_add(1, Ordering::Relaxed);
         if n < 8 || n % 4096 == 0 {
             crate::glog!(
-                "[gow.heap] budget exceeded: {} MiB live (cap {} MiB); allocation returns NULL",
+                "[gow.heap] budget exceeded: {} MiB requested, {} MiB live (cap {} MiB); allocation returns NULL",
+                size / (1024 * 1024),
                 LIVE_BYTES.load(Ordering::Relaxed) / (1024 * 1024),
                 heap_budget() / (1024 * 1024)
             );
@@ -870,7 +978,7 @@ fn heap_alloc_raw(size: usize, align: usize, page: bool) -> *mut u8 {
     // assumptions that pass on Windows' fresh pages.
     let p = unsafe { std::alloc::alloc_zeroed(layout) };
     if p.is_null() { return p; }
-    alloc_table().lock().unwrap().insert(p as usize, Block { size, align });
+    alloc_table().lock().unwrap().insert(p as usize, Block { size, align, mmap: false });
     LIVE_BLOCKS.fetch_add(1, Ordering::Relaxed);
     PEAK_BYTES.fetch_max(live, Ordering::Relaxed);
     // Report heap growth in 128 MiB bands: a leak shows up in the log without a
@@ -879,25 +987,76 @@ fn heap_alloc_raw(size: usize, align: usize, page: bool) -> *mut u8 {
     let last = HEAP_BAND.fetch_max(band, Ordering::Relaxed);
     if band > 0 && band > last {
         crate::glog!(
-            "[gow.heap] live={}MiB blocks={} peak={}MiB",
+            "[gow.heap] live={}MiB blocks={} peak={}MiB reserved={}MiB",
             live / (1024 * 1024),
             LIVE_BLOCKS.load(Ordering::Relaxed),
-            PEAK_BYTES.load(Ordering::Relaxed) / (1024 * 1024)
+            PEAK_BYTES.load(Ordering::Relaxed) / (1024 * 1024),
+            RESERVED_BYTES.load(Ordering::Relaxed) / (1024 * 1024)
         );
     }
     p
 }
+
+/// Serve a big block from mmap(MAP_NORESERVE): address space is reserved now,
+/// zeroed pages materialise on first touch, and only touched pages count
+/// towards RSS. Returns null when the reservation cap refuses or mmap fails.
+#[cfg(unix)]
+fn mmap_reserve(size: usize) -> *mut u8 {
+    let rs = RESERVED_BYTES.fetch_add(size, Ordering::Relaxed) + size;
+    if rs > reserve_budget() {
+        RESERVED_BYTES.fetch_sub(size, Ordering::Relaxed);
+        let n = REFUSED.fetch_add(1, Ordering::Relaxed);
+        if n < 8 || n % 4096 == 0 {
+            crate::glog!(
+                "[gow.heap] reservation refused: {} MiB requested ({} MiB reserved, cap {} MiB); allocation returns NULL",
+                size / (1024 * 1024),
+                RESERVED_BYTES.load(Ordering::Relaxed) / (1024 * 1024),
+                reserve_budget() / (1024 * 1024)
+            );
+        }
+        return std::ptr::null_mut();
+    }
+    let p = unsafe {
+        mmap(std::ptr::null_mut(), size, sys::PROT_READ | sys::PROT_WRITE,
+             sys::MAP_PRIVATE | sys::MAP_ANONYMOUS | sys::MAP_NORESERVE, -1, 0)
+    };
+    if p as isize == sys::MAP_FAILED {
+        RESERVED_BYTES.fetch_sub(size, Ordering::Relaxed);
+        let n = REFUSED.fetch_add(1, Ordering::Relaxed);
+        if n < 8 {
+            crate::glog!("[gow.heap] mmap of {} MiB failed; allocation returns NULL", size / (1024 * 1024));
+        }
+        return std::ptr::null_mut();
+    }
+    alloc_table().lock().unwrap().insert(p as usize, Block { size, align: PAGE, mmap: true });
+    let band = rs / (128 * 1024 * 1024);
+    let last = RESERVED_BAND.fetch_max(band, Ordering::Relaxed);
+    if band > 0 && band > last {
+        crate::glog!("[gow.heap] reserved={}MiB (mmap, zero pages on touch)", rs / (1024 * 1024));
+    }
+    p
+}
+
+#[cfg(not(unix))]
+fn mmap_reserve(_size: usize) -> *mut u8 { std::ptr::null_mut() }
 
 fn heap_free_raw(p: *mut u8) -> bool {
     if p.is_null() { return false; }
     let blk = alloc_table().lock().unwrap().remove(&(p as usize));
     match blk {
         Some(b) => {
-            if let Ok(layout) = std::alloc::Layout::from_size_align(b.size, b.align) {
-                unsafe { std::alloc::dealloc(p, layout) };
+            if b.mmap {
+                // Reserved block: munmap returns the address space (D017).
+                #[cfg(unix)]
+                unsafe { munmap(p, b.size); }
+                RESERVED_BYTES.fetch_sub(b.size, Ordering::Relaxed);
+            } else {
+                if let Ok(layout) = std::alloc::Layout::from_size_align(b.size, b.align) {
+                    unsafe { std::alloc::dealloc(p, layout) };
+                }
+                LIVE_BYTES.fetch_sub(b.size, Ordering::Relaxed);
+                LIVE_BLOCKS.fetch_sub(1, Ordering::Relaxed);
             }
-            LIVE_BYTES.fetch_sub(b.size, Ordering::Relaxed);
-            LIVE_BLOCKS.fetch_sub(1, Ordering::Relaxed);
             true
         }
         None => false, // double free / foreign pointer: ignore (callers log)
@@ -935,6 +1094,11 @@ pub unsafe fn host_realloc_aligned(p: *mut u8, size: usize, align: usize) -> *mu
     }
     if p.is_null() {
         return heap_alloc_raw(size, align, false);
+    }
+    // An mmap'd reservation that shrinks keeps its mapping (the tail pages
+    // are simply never touched); growing falls through to alloc+copy (D017).
+    if let Some(b) = alloc_table().lock().unwrap().get(&(p as usize)).copied() {
+        if b.mmap && size <= b.size { return p; }
     }
     let old = heap_size_raw(p);
     let n = heap_alloc_raw(size, align, false);
@@ -1015,5 +1179,29 @@ fn qpc() -> u64 {
 fn tls_alloc() -> u64 { TLS_IDX.fetch_add(1, Ordering::Relaxed) }
 static TLS_IDX: AtomicU64 = AtomicU64::new(1);
 
-fn tid() -> u64 { TID_COUNTER.fetch_add(1, Ordering::Relaxed) }
+thread_local! {
+    /// Stable id of the calling host thread (assigned on first use).
+    static MY_TID: std::cell::Cell<u64> = std::cell::Cell::new(0);
+}
+
+/// GetCurrentThreadId: the id is stable for the life of the thread. The old
+/// counter returned a NEW value on every call, so anything keying per-thread
+/// state (CRT caches, engine thread registries) grew without bound.
+fn tid() -> u64 {
+    MY_TID.with(|t| {
+        let v = t.get();
+        if v != 0 { return v; }
+        let n = TID_COUNTER.fetch_add(1, Ordering::Relaxed);
+        t.set(n);
+        n
+    })
+}
+
+/// Reserve a fresh thread id (guest-thread spawn).
+pub fn alloc_tid() -> u64 { TID_COUNTER.fetch_add(1, Ordering::Relaxed) }
+
+/// Pin a specific id to the calling thread (guest-thread spawn), so
+/// GetThreadId(handle) and GetCurrentThreadId() agree on the value.
+pub fn set_current_tid(t: u64) { MY_TID.with(|c| c.set(t)) }
+
 static TID_COUNTER: AtomicU64 = AtomicU64::new(1);
