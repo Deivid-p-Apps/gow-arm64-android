@@ -261,6 +261,79 @@ pub fn missing_entry_seen(rva: u32) -> bool {
 #[repr(C)]
 pub struct GowFuncEntry { pub rva: u32, pub fnptr: Option<GowFunc> }
 
+/// Host-side boot used by tools/host_boot.c: runs the REAL game through the
+/// runtime on the host with no APK/device. The C harness passes the generated
+/// `gow_func_table` (terminated by fnptr==NULL) so this works even though the
+/// table lives in the recompiled shards, not the runtime.
+#[cfg(feature = "hostboot")]
+pub unsafe fn host_boot_with_table(game_dir: &str, table: *const GowFuncEntry) -> i32 {
+    // Build the registry from the C table.
+    let mut entries: Vec<(u32, GowFunc)> = Vec::new();
+    let mut p = table;
+    while !p.is_null() {
+        let e = &*p;
+        match e.fnptr {
+            Some(f) => entries.push((e.rva, f)),
+            None => break,
+        }
+        p = p.add(1);
+    }
+    crate::glog!("[host] registry: {} functions", entries.len());
+    install_registry(entries);
+
+    // Enable file logging so the full boot trace is readable (the host runner
+    // has no logcat). Writes gow-<pid>.log under the Port dir when present.
+    let logdir = if std::path::Path::new(&format!("{game_dir}/Port")).exists() {
+        format!("{game_dir}/Port")
+    } else {
+        game_dir.to_string()
+    };
+    crate::log::set_file_logging(true, &logdir);
+
+    // PE metadata for the real game (fixed from the .exe header).
+    let image_base = 0x140000000u64;
+    let image_size = 0x519f000u64;
+    let entry_rva = 0x3ec680u32;
+
+    // Wire the import resolver + file table to the game dir.
+    let mut res = crate::win32::ImportResolver::new(game_dir);
+    let manifest_paths = [format!("{game_dir}/manifest.json")];
+    if let Some(j) = manifest_paths.iter().find_map(|p| std::fs::read_to_string(p).ok()) {
+        if res.load_manifest(&j).is_ok() {
+            crate::glog!("[host] import resolver installed ({} slots)", res.slot_count());
+        }
+    } else {
+        crate::glog!("[host] WARNING: no manifest.json in {game_dir}");
+    }
+    set_import_resolver(std::sync::Arc::new(res));
+
+    let mut cpu = GowCpu::new(image_base, image_size as usize);
+    let exe = format!("{game_dir}/GodOfWar/GoW.exe");
+    let exe = if std::path::Path::new(&exe).exists() { exe } else { format!("{game_dir}/GoW.exe") };
+    let pe = crate::pe_load::load_into(&exe, cpu.image, cpu.image_size as usize);
+    crate::glog!("[host] PE loaded={}", pe.is_some());
+    if let Some(info) = &pe {
+        refresh_tls_template(cpu.as_mut() as *mut GowCpu);
+        for cb in &info.tls_callbacks {
+            let rva = cb.wrapping_sub(image_base);
+            if rva < 0xffff_ffff {
+                for reason in [1u64, 2u64] {
+                    crate::glog!("[host.tls] callback rva=0x{rva:x} reason={reason}");
+                    let c = cpu.as_mut() as *mut GowCpu;
+                    (*c).gpr.rcx = image_base;
+                    (*c).gpr.rdx = reason;
+                    (*c).gpr.r8 = 0;
+                    gow_run(c, rva as u32);
+                }
+            }
+        }
+    }
+    crate::glog!("[host] entry=0x{entry_rva:x} running");
+    gow_run(cpu.as_mut() as *mut GowCpu, entry_rva);
+    crate::glog!("[host] returned from entry");
+    0
+}
+
 impl GowCpu {
     pub fn new(image_base: u64, image_size: usize) -> Box<Self> {
         // Map the guest image at its ORIGINAL virtual address (e.g. 0x140000000)

@@ -112,3 +112,25 @@ mas NÃO logava — então "unimpl=2495" não dizia qual função faltava. Agora
 (`[gow.sample.trace]`) do CPU principal. E `refresh_tls_template` copia o template
 TLS para o bloco do CPU principal, que é criado ANTES do `load_into` (o template
 só era aplicado nos threads novos).
+
+## D026 — Descoberta de funções por ponteiros de código em .rdata/.data (vtables)
+O descobridor só seguia `call/jmp rel32` direto. Mas o engine guarda ponteiros de
+função em tabelas (vtables, tabelas de handlers/jump) nas seções de dados e as
+chama indiretamente. Isso deixava 512 funções em `.text` SEM lift, e o loop de
+dispatch caía em `[gow.MISSFN] ... no lifted entry` (build #171, thread principal
+travado). Windows x64 garante funções alinhadas a 16 bytes; agora toda seção NÃO
+executável é varrida por valores de 8 bytes que apontam para um RVA alinhado a 16
+dentro de uma seção executável, e esses RVAs viram entradas. Resultado: 96.324
+funções (de 90.943), MISSFN caiu de 512 → 1 (o único restante é `0xd4e660`, um
+ponteiro em `.rdata` que não é código, e o dispatch o ignora).
+
+## D027 — Shell/disco/console: o boot para de mentir "Sem espaço/permissão"
+Com o D026 o jogo passou a chegar MUITO mais longe: boot real até `SHGetKnown
+FolderPath`, `GetDiskFreeSpaceExW` e um `MessageBox` de erro. Faltavam:
+- `SHGetKnownFolderPath`: cria "SavedGames"/"Documents" sob o game dir e devolve o
+  caminho em wide-string alocada (antes: unimplemented → "Permissions Error:
+  Unable to access Saved Games" em loop).
+- `GetDiskFreeSpaceExW`/`W`: `statvfs` do game dir (antes: unimplemented → 0 →
+  "Not Enough Disk Space" em loop).
+- `GetDiskFreeSpaceW`, `setvbuf`, `LocalAlloc/Free`, `CoTaskMemAlloc/Free`,
+  `GetConsoleWindow`/`ShowWindow`/`DestroyWindow`/`FreeConsole`.

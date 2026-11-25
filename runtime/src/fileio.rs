@@ -85,6 +85,12 @@ impl FileTable {
         self.game_dir.join(p)
     }
 
+    /// The configured game directory (host path). Used by handlers that must
+    /// materialize engine data folders (e.g. SHGetKnownFolderPath).
+    pub fn game_dir(&self) -> &std::path::Path {
+        &self.game_dir
+    }
+
     pub fn create(&self, win_path: &str, access: u32, disposition: u32) -> u64 {
         let path = self.translate(win_path);
         if let Some(parent) = path.parent() {

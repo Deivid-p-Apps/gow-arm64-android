@@ -506,7 +506,77 @@ impl ImportResolver {
                 c.gpr.rax = 1; // IDOK
                 true
             }
+            ("user32.dll", "ShowWindow") | ("user32.dll", "DestroyWindow") => { c.gpr.rax = 1; true }
+            ("user32.dll", "GetDesktopWindow") | ("user32.dll", "GetForegroundWindow") => { c.gpr.rax = 0x10001; true }
+            ("kernel32.dll", "GetConsoleWindow") => { c.gpr.rax = 0; true }
+            ("kernel32.dll", "FreeConsole") | ("kernel32.dll", "AttachConsole") => { c.gpr.rax = 1; true }
+            ("kernel32.dll", "AllocConsole") => { c.gpr.rax = 0; true }
+            // SHGetKnownFolderPath(rfid, flags, hToken, PWSTR* ppszPath): the
+            // engine asks for the Saved Games (and Documents) folder at boot;
+            // the old unimplemented answer failed the call and the engine looped
+            // on a "Permissions Error: Unable to access Saved Games" MessageBox
+            // (device/host build #171). Create the folder under the game dir and
+            // return it as a heap-allocated wide string. FOLDERID_SavedGames =
+            // {4C5C32FF-BB9D-43b0-B5B4-2D72E54EAAA4}, Documents =
+            // {FDD39AD0-238F-46AF-ADB4-6C85480369C7}: we key off the first
+            // Guid dword + the data4 to pick the subfolder name.
+            ("shell32.dll", "SHGetKnownFolderPath") => {
+                // rfid is a pointer to the GUID (16 bytes) in the guest image.
+                let mut name = "SavedGames";
+                if okp(a0, 16) {
+                    let d1 = *(a0 as *const u32);
+                    let d4 = *((a0 + 12) as *const u32);
+                    if d1 == 0xFDD39AD0 { name = "Documents"; }
+                    let _ = d4;
+                }
+                let folder = self.files.game_dir().join(name);
+                let _ = std::fs::create_dir_all(&folder);
+                let path_w: Vec<u16> = folder.to_string_lossy().encode_utf16().chain(std::iter::once(0)).collect();
+                let bytes = path_w.len() * 2;
+                let mem = crate::win32::host_alloc(bytes);
+                if !mem.is_null() {
+                    std::ptr::copy_nonoverlapping(path_w.as_ptr() as *const u8, mem, bytes);
+                }
+                if okp(a3, 8) { *(a3 as *mut u64) = mem as u64; }
+                crate::glog!("[gow.shell] SHGetKnownFolderPath -> {name} = {folder:?}");
+                c.gpr.rax = 0; // S_OK
+                true
+            }
             ("kernel32.dll", "GetProcessHeap") => { c.gpr.rax = 0xdead0001; true }
+            // GetDiskFreeSpaceExW(lpDirectoryName, lpFreeBytesAvailableToCaller,
+            // lpTotalNumberOfBytes, lpTotalNumberOfFreeBytes): out pointers in
+            // RDX/R8/R9 (ULARGINTEGER 64-bit). The engine's "Not Enough Disk
+            // Space" check read our uninitialized 0 and refused to boot
+            // (host/device build #171); report a large free space on the host
+            // filesystem (statvfs on the game dir).
+            ("kernel32.dll", "GetDiskFreeSpaceExW") | ("kernel32.dll", "GetDiskFreeSpaceExA") => {
+                let (free, total) = host_disk_space(self.files.game_dir());
+                if okp(a1, 8) { *(a1 as *mut u64) = free; }
+                if okp(a2, 8) { *(a2 as *mut u64) = total; }
+                if okp(a3, 8) { *(a3 as *mut u64) = free; }
+                c.gpr.rax = 1; true
+            }
+            ("kernel32.dll", "GetDiskFreeSpaceW") | ("kernel32.dll", "GetDiskFreeSpaceA") => {
+                // Old API: (root, &sectorsPerCluster, &bytesPerSector,
+                // &freeClusters, &totalClusters) — DWORD outputs.
+                if okp(a1, 4) { *(a1 as *mut u32) = 8; }        // sectors/cluster
+                if okp(a2, 4) { *(a2 as *mut u32) = 512; }      // bytes/sector
+                if okp(a3, 4) { *(a3 as *mut u32) = 0x100000; } // free clusters (~4 GiB)
+                if okp(a4, 4) { *(a4 as *mut u32) = 0x200000; } // total clusters
+                c.gpr.rax = 1; true
+            }
+            ("kernel32.dll", "LocalAlloc") | ("kernel32.dll", "GlobalAlloc") => {
+                // (flags, bytes): bytes in RDX. The result is only ever passed to
+                // LocalFree/GlobalFree, so a tracked host allocation is enough.
+                c.gpr.rax = crate::win32::host_alloc(a1 as usize) as u64; true
+            }
+            ("kernel32.dll", "LocalFree") | ("kernel32.dll", "GlobalFree") => {
+                if a0 != 0 { crate::win32::host_free(a0 as *mut u8); }
+                c.gpr.rax = 0; true
+            }
+            ("ole32.dll", "CoTaskMemAlloc") => { c.gpr.rax = crate::win32::host_alloc(a0 as usize) as u64; true }
+            ("ole32.dll", "CoTaskMemFree") => { if a0 != 0 { crate::win32::host_free(a0 as *mut u8); } c.gpr.rax = 0; true }
+            ("ole32.dll", "CoTaskMemRealloc") => { c.gpr.rax = crate::win32::host_realloc(a0 as *mut u8, a1 as usize) as u64; true }
             ("kernel32.dll", "HeapCreate") => { c.gpr.rax = 0xdead0002; true }
             ("kernel32.dll", "HeapDestroy") => { c.gpr.rax = 1; true }
             ("kernel32.dll", "HeapAlloc") | ("kernel32.dll", "malloc") => {
@@ -1149,6 +1219,31 @@ impl Default for ImportResolver {
 /// the degraded engine state passed pointers like 0x80 and killed the host
 /// (SEGV at 0x80, build #155).
 fn okp(p: u64, len: u64) -> bool { crate::dispatch::plausible_mem(p, len) }
+
+/// Free and total bytes of the filesystem backing `dir` (statvfs), so the
+/// engine's disk-space gate passes. Falls back to a large constant if the
+/// syscall fails (e.g. an unreadable path).
+fn host_disk_space(dir: &std::path::Path) -> (u64, u64) {
+    // libc::statvfs is not in the crate's deps; call it via a tiny decl.
+    #[repr(C)]
+    struct Statvfs {
+        f_bsize: u64, f_frsize: u64, f_blocks: u64, f_bfree: u64, f_bavail: u64,
+        f_files: u64, f_ffree: u64, f_favail: u64, f_fsid: u64, f_flag: u64,
+        f_namemax: u64, __spare: [u32; 6],
+    }
+    extern "C" { fn statvfs(path: *const std::os::raw::c_char, buf: *mut Statvfs) -> i32; }
+    let c = std::ffi::CString::new(dir.to_string_lossy().as_bytes()).unwrap_or_default();
+    let mut st: Statvfs = unsafe { std::mem::zeroed() };
+    let rc = unsafe { statvfs(c.as_ptr(), &mut st) };
+    if rc == 0 && st.f_blocks > 0 {
+        let bs = if st.f_frsize != 0 { st.f_frsize } else { st.f_bsize };
+        let total = st.f_blocks.saturating_mul(bs);
+        let free = st.f_bavail.saturating_mul(bs);
+        (free, total)
+    } else {
+        (32u64 << 30, 64u64 << 30)
+    }
+}
 
 /// Build a fiber "handle" as a hostcall thunk that runs the fiber proc nested
 /// on the calling thread (D019). Returns 0 when the start address is not in

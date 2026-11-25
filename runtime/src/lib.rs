@@ -22,3 +22,18 @@ pub mod x87;
 pub mod jni;
 
 pub use dispatch::{GowCpu, GowFunc};
+
+/// Host-side boot: run the real recompiled game through the runtime on the
+/// host (no APK/device/DXVK). Used by tools/host_boot.c so lifter/Win32/CRT
+/// bugs surface in seconds.
+#[cfg(feature = "hostboot")]
+#[no_mangle]
+pub unsafe extern "C" fn host_boot_run(
+    game_dir: *const std::os::raw::c_char,
+    table: *const dispatch::GowFuncEntry,
+) -> std::os::raw::c_int {
+    use std::ffi::CStr;
+    let gdir = CStr::from_ptr(game_dir).to_string_lossy().into_owned();
+    dispatch::host_boot_with_table(&gdir, table)
+}
+

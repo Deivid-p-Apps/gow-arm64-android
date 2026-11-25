@@ -9,6 +9,13 @@ description = "Win32/NT + dispatcher runtime for recompiled God of War (2018)"
 name = "gow_runtime"
 crate-type = ["cdylib", "staticlib", "rlib"]
 
+[features]
+# Enables the host boot harness entry points (tools/host_boot.c). Off by default
+# so the device/APK build never includes the host-only boot path. (Termux rustc
+# targets aarch64-linux-android, so cfg(target_os="android") is TRUE there — a
+# Cargo feature is the reliable switch.)
+hostboot = []
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

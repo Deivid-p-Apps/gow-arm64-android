@@ -221,6 +221,46 @@ pub fn lift(pe: &PeImage, out_dir: &std::path::Path) -> Result<LiftOutput> {
     // body with iced (correct instruction boundaries), collect direct targets,
     // add them, and iterate to a fixpoint. This is robust where a linear .text
     // sweep desyncs on embedded data.
+    //
+    // IMPORTANT: direct call/jmp targets are NOT enough. The engine stores
+    // function pointers in .rdata/.data (vtables, handler tables, jump tables)
+    // and calls them indirectly. On device those produced
+    // `[gow.MISSFN] dispatch to rva=... no lifted entry` for 512 functions and
+    // the main thread then hung waiting on work those functions should do
+    // (device build #171). Windows documents that x64 functions are 16-byte
+    // aligned; scan every non-executable section for 8-byte values that point
+    // at a 16-aligned RVA inside an executable section and seed those as
+    // entries too. False positives are harmless: an entry inside an existing
+    // function is merged by the fall-through logic (D020); an entry at a data
+    // byte then just decodes a few instructions and traps.
+    {
+        let exec_ranges: Vec<(u32, u32)> = pe
+            .sections
+            .iter()
+            .filter(|s| s.is_executable())
+            .map(|s| (s.virtual_address, s.end_rva()))
+            .collect();
+        let in_exec = |rva: u32| exec_ranges.iter().any(|&(a, b)| rva >= a && rva < b);
+        for s in &pe.sections {
+            if s.is_executable() { continue; }
+            let n = s.raw_size.min(s.virtual_size.max(s.raw_size)) as usize;
+            let base = s.raw_offset as usize;
+            if base + n > pe.bytes.len() { continue; }
+            let mut off = 0usize;
+            while off + 8 <= n {
+                let v = u64::from_le_bytes(pe.bytes[base + off..base + off + 8].try_into().unwrap());
+                if v >= pe.image_base && v < pe.image_base + pe.size_of_image as u64 {
+                    let rva = (v - pe.image_base) as u32;
+                    if rva % 16 == 0 && in_exec(rva) {
+                        entries.insert(rva);
+                    }
+                }
+                off += 8;
+            }
+        }
+        eprintln!("[discover] after pointer-table scan: {} entries", entries.len());
+    }
+
     {
         // Sorted pdata map: start -> end (for the initial body bound).
         let mut pd: Vec<(u32, u32)> = pe.pdata_functions.clone();
