@@ -92,6 +92,7 @@ unsafe fn read_jstring(env: *mut std::ffi::c_void, s: *mut std::ffi::c_void) -> 
     if env.is_null() || s.is_null() {
         return String::new();
     }
+    // JNIEnv is a pointer to a table of function pointers.
     let table = *(env as *const *const usize);
     let get = *table.add(169) as *const ();
     let release = *table.add(170) as *const ();
