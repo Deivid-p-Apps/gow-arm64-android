@@ -83,3 +83,24 @@ com os rótulos/gotos cruzando os limites. O fallback de fall-through simples
 Um guest corrompido em loop apertado gerava 277.027 linhas `badload` idênticas
 (455 MB de log), enterrando a causa real e enchendo o armazenamento do aparelho.
 Cada par (rva, addr) agora loga uma vez só, com teto de 4096 entradas.
+
+## D022 — `call qword [mem]` carrega o PONTEIRO do slot (não o endereço)
+O lifter emitia `gow_call_ptr(cpu, mem_expr(...))` para `call qword [rbx+0x10]`,
+passando o ENDEREÇO do slot (`rbx+0x10`) como se fosse a função, em vez de ler o
+ponteiro guardado nele. Isso quebrou TODA chamada virtual/objeto-relative — as
+vtables do engine — e produzia os `[gow.MISSCALL] indirect target_va=0xb400...10`
+(na verdade `param+0x10`). Eram **22.498** sites no binário. Agora usa
+`operand_read`, que emite `gow_load(cpu, rbx+0x10, 8)` — o valor correto.
+
+## D023 — Template TLS do módulo é copiado para o bloco TLS de cada thread
+O loader do Windows copia `[StartAddressOfRawData, EndAddressOfRawData)` do
+diretório TLS para o bloco TLS de cada thread no início dela. O runtime alocava
+os 128 slots TLS zerados mas nunca copiava o template, então variáveis
+`thread_local` do engine liam 0 e o código dereferenciava NULL (log do device:
+store em `rcx=0` no rva 0x400cbb, via `gs:[0x58]` -> `[*tlsp]` -> `[[tls]+0x28]`).
+`pe_load` agora registra o template e `GowCpu::new` o copia para o slot 0.
+
+## D024 — Chunks: `call [mem]` + stubs CRT + dedup de log
+Além de D020/D022/D023: `getenv`/`wcstombs`/`mbstowcs` implementados (apareciam
+como "unimplemented" no boot); log de `badload`/`badstore` com dedup por
+`(rva, addr)` (um loop corrompido gerava 455 MB de log e enterrava a causa raiz).

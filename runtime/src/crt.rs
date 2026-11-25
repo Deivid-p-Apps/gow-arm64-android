@@ -317,6 +317,45 @@ pub unsafe fn call(cpu: *mut GowCpu, func: &str) -> bool {
             val
         }
         "__C_specific_handler" | "__CxxFrameHandler3" => return false, // SEH/C++ exceptions unimplemented
+        // --- environment / locale / narrow-wide conversion ---
+        // These were logged "unimplemented" during boot. Returning 0 for getenv
+        // is correct (no env vars set); the conversions must not leave RAX as
+        // garbage. wcstombs(wchar* src, char* dst, size_t n) is RCX/RDX/R8.
+        "getenv" | "_wgetenv" => 0,
+        "wcstombs" | "wcstombs_s" => {
+            // Convert the wide string at a0 into the byte buffer at a1, up to a2
+            // bytes, NUL-terminated. Returns the count written (not incl. NUL).
+            if !plausible_mem(a1, 1) { 0 } else {
+                let mut n = 0u64;
+                let mut i = 0u64;
+                while n + 1 < a2 && plausible_mem(a0 + i * 2, 2) {
+                    let w = *((a0 + i * 2) as *const u16);
+                    if w == 0 { break; }
+                    // ASCII-range only; anything else becomes '?'.
+                    let ch = if w < 0x80 { w as u8 } else { b'?' };
+                    *((a1 + n) as *mut u8) = ch;
+                    n += 1; i += 1;
+                }
+                *((a1 + n) as *mut u8) = 0;
+                n
+            }
+        }
+        "mbstowcs" | "mbstowcs_s" => {
+            // Convert the narrow string at a0 into the wide buffer at a1, up to
+            // a2 wide chars, NUL-terminated. Returns the count written.
+            if !plausible_mem(a1, 2) { 0 } else {
+                let mut n = 0u64;
+                let mut i = 0u64;
+                while n + 1 < a2 && plausible_mem(a0 + i, 1) {
+                    let ch = *((a0 + i) as *const u8);
+                    if ch == 0 { break; }
+                    *((a1 + n * 2) as *mut u16) = ch as u16;
+                    n += 1; i += 1;
+                }
+                *((a1 + n * 2) as *mut u16) = 0;
+                n
+            }
+        }
         _ => return false,
     };
     c.gpr.rax = ret;

@@ -178,6 +178,20 @@ fn shared_images() -> &'static Mutex<HashMap<u64, SharedImage>> {
     M.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// Process-global TLS template (StartAddressOfRawData, size), set once by the PE
+/// loader. GowCpu::new copies it into module 0's TLS slot for each new thread,
+/// matching what the Windows loader does. See the TLS-slot setup in `new`.
+fn tls_template_slot() -> &'static Mutex<Option<(u64, u32)>> {
+    static S: OnceLock<Mutex<Option<(u64, u32)>>> = OnceLock::new();
+    S.get_or_init(|| Mutex::new(None))
+}
+pub fn set_tls_template(va: u64, size: u32) {
+    *tls_template_slot().lock().unwrap() = Some((va, size));
+}
+fn tls_template() -> Option<(u64, u32)> {
+    *tls_template_slot().lock().unwrap()
+}
+
 /// Map (or reuse) the guest image at `base`. Returns (pointer, mapped_at_fixed).
 fn map_at_shared(base: u64, size: usize) -> (*mut u8, bool) {
     let mut map = shared_images().lock().unwrap();
@@ -273,6 +287,19 @@ impl GowCpu {
                 }
             }
             *((teb + 0x58) as *mut u64) = tls_ptr;               // ThreadLocalStoragePointer
+            // Module 0's TLS block (slot 0) must contain a COPY of the image's
+            // TLS template: Windows' loader memcpys [StartAddressOfRawData,
+            // EndAddressOfRawData) into every thread's TLS block at thread start.
+            // Without it, `mov rax,[gs:0x58]; mov rdx,[rax]; mov rax,[rdx+0x28]`
+            // reads 0 and the engine dereferences NULL (device log: the store at
+            // 0x400cbb wrote to rcx=0). load_into() records the template VA/size.
+            if let Some((tva, tsize)) = tls_template() {
+                let slot0 = *((tls_ptr) as *const u64);
+                if slot0 != 0 && tsize > 0 {
+                    let n = (tsize as usize).min(0x1000);
+                    std::ptr::copy_nonoverlapping(tva as *const u8, slot0 as *mut u8, n);
+                }
+            }
             // Inline TlsSlots array at 0x148 (already zeroed).
 
             // --- PEB ---

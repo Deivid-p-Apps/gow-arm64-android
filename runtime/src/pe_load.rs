@@ -39,6 +39,14 @@ pub struct PeInfo {
     pub tls_callbacks: Vec<u64>,
     /// The TLS slot index we assigned (written to tls_index_va).
     pub tls_index: u32,
+    /// Start VA of the module's TLS template (StartAddressOfRawData). Windows
+    /// copies [RawData, RawDataEnd) into every thread's TLS block for this
+    /// module at thread start; we must do the same or `thread_local` variables
+    /// read as zero (device log: a store through a null TLS pointer at
+    /// 0x400cbb).
+    pub tls_raw_va: u64,
+    /// Size in bytes of the TLS template.
+    pub tls_raw_size: u32,
 }
 
 /// Parse the headers and copy sections from `exe_path` into `dest` (a buffer
@@ -84,10 +92,20 @@ pub fn load_into(exe_path: &str, dest: *mut u8, dest_len: usize) -> Option<PeInf
     }
     // TLS directory: grab the index VA and the callback list, and assign a slot.
     let (mut tls_index_va, mut tls_callbacks) = (0u64, Vec::new());
+    let (mut tls_raw_va, mut tls_raw_size) = (0u64, 0u32);
     let tls_rva = u32(&b, opt + 112 + 9 * 8);
     if tls_rva != 0 {
         if let Some(off) = rva_to_off(&b, opt, optsz, nsec, tls_rva) {
             tls_index_va = u64(&b, off + 16);
+            // StartAddressOfRawData / EndAddressOfRawData / SizeOfZeroFill form
+            // the template Windows copies into each thread's TLS block.
+            let raw_start = u64(&b, off);
+            let raw_end = u64(&b, off + 8);
+            let zero_fill = u32(&b, off + 32);
+            if raw_start >= image_base && raw_end > raw_start {
+                tls_raw_va = raw_start;
+                tls_raw_size = ((raw_end - raw_start) as u32).saturating_add(zero_fill);
+            }
             let cbs = u64(&b, off + 24);
             if cbs >= image_base {
                 let cbo = rva_to_off(&b, opt, optsz, nsec, (cbs - image_base) as u32);
@@ -112,5 +130,9 @@ pub fn load_into(exe_path: &str, dest: *mut u8, dest_len: usize) -> Option<PeInf
         }
     }
     glog!("[gow.pe] mapped image: base=0x{image_base:x} size=0x{size_of_image:x} entry=0x{entry_rva:x} tls_idx=0x{tls_index_va:x} tls_callbacks={}", tls_callbacks.len());
-    Some(PeInfo { image_base, size_of_image, entry_rva, tls_index_va, tls_callbacks, tls_index })
+    if tls_raw_va != 0 && tls_raw_size != 0 {
+        glog!("[gow.pe] TLS template va=0x{tls_raw_va:x} size=0x{tls_raw_size:x} (copied into each thread's TLS block)");
+        crate::dispatch::set_tls_template(tls_raw_va, tls_raw_size);
+    }
+    Some(PeInfo { image_base, size_of_image, entry_rva, tls_index_va, tls_callbacks, tls_index, tls_raw_va, tls_raw_size })
 }

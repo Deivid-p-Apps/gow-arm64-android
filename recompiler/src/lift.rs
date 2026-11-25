@@ -607,9 +607,16 @@ fn emit(c: &mut String, insn: &Instruction, image_base: u64, iat: &std::collecti
                         return Ok(false);
                     }
                 }
-                let addr = mem_expr(insn, image_base);
+                // `call qword [mem]` loads the target pointer FROM [mem] and
+                // calls it — it is NOT a call to the address of [mem]. Using
+                // mem_expr here passed the slot address (e.g. rbx+0x10) as if it
+                // were the function, so an engine object-relative virtual call
+                // `call [rbx+0x10]` dispatched to 0xb400...10 and mis-called.
+                // operand_read emits the proper gow_load of the slot.
+                let loaded = operand_read(insn, 0, image_base)
+                    .unwrap_or_else(|| format!("gow_load(cpu, {}, 8)", mem_expr(insn, image_base)));
                 writeln!(c, "  gow_push64(cpu, 0x{ret:x}u);")?;
-                writeln!(c, "  gow_call_ptr(cpu, (uint64_t)({addr}));")?;
+                writeln!(c, "  gow_call_ptr(cpu, (uint64_t)({loaded}));")?;
                 writeln!(c, "  gow_pop64(cpu);")?;
             } else {
                 writeln!(c, "  gow_push64(cpu, 0x{ret:x}u);")?;
