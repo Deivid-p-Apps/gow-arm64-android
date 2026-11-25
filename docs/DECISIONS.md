@@ -59,3 +59,48 @@ O backend nativo é o alvo final; DXVK é fallback até a paridade.
 Imports desconhecidos, alvos de salto não resolvidos e instruções não liftadas são
 contados e logados (logcat), nunca silenciados. Nenhuma métrica é fabricada;
 `docs/PERFORMANCE.md` só recebe números medidos no dispositivo.
+
+## D013 — Heap Win32 rastreado: free de verdade, sem arredondar tudo a 4 KiB
+A primeira camada Win32 usava um "bump allocator": `host_free` era no-op e toda
+alocação era arredondada para 4 KiB alinhados a página. Um jogo do porte de GoW
+faz milhões de alocações pequenas no boot/loading; o processo inchava até o LMK
+do Android matar o app — o "consome toda a RAM e fecha" dos logs do aparelho.
+Agora cada bloco é registrado (ptr -> tamanho/alinhamento) numa tabela global;
+`free`, `HeapFree`, `HeapReAlloc` (que copiava além do bloco antigo — overread)
+e `VirtualFree` devolvem memória de verdade; `realloc` copia min(antigo, novo).
+Um teto (default 3072 MiB, override `GOW_HEAP_MB`) faz a alocação falhar
+explicitamente (o jogo vê OOM) em vez de o kernel nos matar. O heap reporta
+crescimento em bandas de 128 MiB no log, e o sampler de 2 s exibe o RSS.
+
+## D014 — LoadLibrary/GetProcAddress servem pseudo-módulos e thunks hostcall
+`GetProcAddress` retornava sempre 0. Um jogo que resolve `D3D11CreateDevice`
+dinamicamente guardava NULL e chamava — exatamente a tempestade
+`[gow.MISSCALL] target_va=0x0` (e os `badload addr=0x40` de ponteiros quase-nulos
+no caminho de erro) dos logs. Agora `LoadLibrary` devolve um pseudo-handle para
+qualquer DLL e `GetProcAddress` devolve um thunk hostcall que empacota os
+argumentos MS x64 (RCX/RDX/R8/R9 + [rsp+0x28]) e chama o símbolo real — o
+backend DXVK Native para d3d11/dxgi/d3dcompiler, o import resolver para o resto.
+Na mesma frente foram corrigidos: strings `*W` lidas como ANSI (o teste
+`dll_l.ends_with('w')` nunca era verdadeiro — agora é `func.ends_with('W')`),
+`CreateThread` com start/param trocados (start é R8, não R9), e os args de pilha
+lidos em `arg(4)` em vez de `arg(0)` (disposition do CreateFile, size_lo do
+CreateFileMapping, count do MapViewOfFile, whence do SetFilePointer).
+
+## D015 — Imagem guest compartilhada por base entre todas as GowCpu
+Cada `GowCpu::new` fazia `mmap MAP_FIXED` no MESMO endereço (0x140000000). Ao
+spawnar a primeira thread (`CreateThread` cria uma GowCpu nova), o kernel
+SUBSTITUIA o mapeamento que a thread main estava executando: código zerado,
+corrupção instantânea e silenciosa. O primeiro mapeamento por base agora vive
+num registro global e é compartilhado por todas as CPUs (threads, re-runs da
+activity). A GowCpu que o sampler de diagnóstico lê é vazada (uma por processo)
+para a thread de monitoramento não ler memória liberada. O log de MISSCALL
+ganha deduplicação por alvo distinto (um loop de erro quente não gera mais
+megabytes de log por minuto).
+
+## D016 — MapViewOfFile via mmap, não cópia integral
+`CreateFileMapping` lia o arquivo INTEIRO para um Vec na RAM (packs do GoW têm
+GBs) e `UnmapViewOfFile` não soltava nada. Agora o mapeamento é `mmap MAP_PRIVATE`
+do arquivo (páginas sobem do page cache sob demanda), as views são rastreadas e
+desmapeadas de verdade; fallback para o Vec se mmap falhar. `CloseHandle` num
+mapping fecha o fd e mantém as páginas (MAP_PRIVATE sobrevive sem o fd, igual ao
+Windows que permite CloseHandle com views abertas).

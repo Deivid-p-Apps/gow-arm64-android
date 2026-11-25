@@ -45,7 +45,9 @@ pub unsafe fn call(cpu: *mut GowCpu, func: &str) -> bool {
         "free" => { crate::win32::host_free(a0 as *mut u8); 0 }
         "_aligned_malloc" => crate::win32::host_alloc_aligned(a0 as usize, a1 as usize) as u64,
         "_aligned_free" => { crate::win32::host_free(a0 as *mut u8); 0 }
-        "_aligned_realloc" => crate::win32::host_realloc(a0 as *mut u8, a1 as usize) as u64,
+        // _aligned_realloc(mem, size, alignment): the alignment (R8) used to be
+        // dropped, silently downgrading AVX-sized alignments to 16 bytes.
+        "_aligned_realloc" => crate::win32::host_realloc_aligned(a0 as *mut u8, a1 as usize, a2 as usize) as u64,
         // --- strings ---
         "strcmp" | "_stricmp" | "_strcmp" => {
             let a = cstr(a0); let b = cstr(a1);

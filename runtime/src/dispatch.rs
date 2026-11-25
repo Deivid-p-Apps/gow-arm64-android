@@ -1,18 +1,18 @@
 //! Dispatcher + guest memory for recompiled x86-64 code.
 //!
-//! Control-flow model
-//! ------------------
-//! Generated functions (gow_game.c) never call each other with the C call
-//! mechanism. Each one sets the "next" function pointer/RVA in GowCpu and
-//! returns to a central loop (`gow_run`). This makes x86 call / ret / tail-jmp
-//! exact without relying on host stack frames:
-//!   * call  -> push return RVA onto the *guest* stack, set next = callee
-//!   * ret   -> pop the guest stack into next
-//!   * jmp   -> set next = target (loop continues, no C recursion)
-//! The loop is a trampoline; guest stack depth is bounded by the game itself.
+//! Control-flow model (D008)
+//! -------------------------
+//! Generated functions call each other with plain C calls (`f_<rva>(cpu)`);
+//! intra-function branches become `goto L_<rva>` in the emitted C. Only
+//! computed/unknown targets go through `gow_trampoline`/`gow_call_indirect`,
+//! and import thunks through `gow_import_call`. `gow_run` is the outermost
+//! driver: it dispatches the entry function and returns when the guest entry
+//! returns. Guest call/ret are emulated on the guest stack around each C call,
+//! so the guest stack depth is bounded by the game itself.
 
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 pub type GowFunc = unsafe extern "C" fn(*mut GowCpu);
 
@@ -59,7 +59,9 @@ pub struct GowCpu {
     pub image_base: u64,
     pub image_size: u64,
     pub image: *mut u8,
-    /// Owns the backing allocation for `image` (kept alive with the CPU).
+    /// Legacy field (C ABI): kept for layout compatibility. The backing
+    /// allocation now lives in the process-global shared-image registry (D015),
+    /// so this Vec stays empty.
     pub image_buf: Vec<u8>,
     /// Owns the guest stack allocation.
     pub stack_buf: Vec<u8>,
@@ -134,6 +136,54 @@ fn map_at(base: u64, size: usize) -> (*mut u8, Vec<u8>, bool) {
     (p, v, false)
 }
 
+// ---------------------------------------------------------------------------
+// Shared guest-image mapping (D015)
+// ---------------------------------------------------------------------------
+
+/// Process-global registry of guest image mappings, keyed by base address.
+///
+/// Every `GowCpu::new` used to MAP_FIXED its own copy of the guest image at
+/// the same base (0x140000000). The first `CreateThread` spawns a fresh GowCpu
+/// for the new thread and the kernel silently REPLACED the mapping the main
+/// thread was executing from — zeroed code, instant corruption. The first
+/// mapping for a base now wins and is shared by every later CPU (thread
+/// spawns, activity re-runs).
+struct SharedImage {
+    ptr: *mut u8,
+    size: usize,
+    /// Empty when MAP_FIXED succeeded (the mapping owns the memory).
+    _buf: Vec<u8>,
+}
+unsafe impl Send for SharedImage {}
+
+fn shared_images() -> &'static Mutex<HashMap<u64, SharedImage>> {
+    static M: OnceLock<Mutex<HashMap<u64, SharedImage>>> = OnceLock::new();
+    M.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Map (or reuse) the guest image at `base`. Returns (pointer, mapped_at_fixed).
+fn map_at_shared(base: u64, size: usize) -> (*mut u8, bool) {
+    let mut map = shared_images().lock().unwrap();
+    if let Some(img) = map.get(&base) {
+        if img.size < size {
+            crate::glog!(
+                "[gow] WARNING: shared image at 0x{base:x} is 0x{:x} bytes but 0x{size:x} requested; reusing",
+                img.size
+            );
+        }
+        return (img.ptr, true);
+    }
+    let (p, buf, fixed) = map_at(base, size);
+    let mapped = buf.len().max(size);
+    map.insert(base, SharedImage { ptr: p, size: mapped, _buf: buf });
+    (p, fixed)
+}
+
+/// Distinct missed indirect-call targets (dedup for the MISSCALL log).
+fn misscall_seen() -> &'static Mutex<std::collections::HashSet<u64>> {
+    static S: OnceLock<Mutex<std::collections::HashSet<u64>>> = OnceLock::new();
+    S.get_or_init(|| Mutex::new(std::collections::HashSet::new()))
+}
 
 /// Function table emitted by the recompiler (gow_game.c) is registered at
 /// startup via `install_registry`, so no extern symbol is required here.
@@ -145,9 +195,10 @@ impl GowCpu {
     pub fn new(image_base: u64, image_size: usize) -> Box<Self> {
         // Map the guest image at its ORIGINAL virtual address (e.g. 0x140000000)
         // so guest pointers equal host pointers and absolute addresses in the
-        // recompiled code (globals, vtables) are valid. Falls back to a normal
-        // allocation if the fixed mapping is unavailable.
-        let (image, image_buf, fixed) = map_at(image_base, image_size);
+        // recompiled code (globals, vtables) are valid. The mapping is shared
+        // process-wide per base (D015): a second GowCpu (thread spawn, activity
+        // re-run) must never MAP_FIXED over live code.
+        let (image, fixed) = map_at_shared(image_base, image_size);
         let mut stack = vec![0u8; 16 * 1024 * 1024];
         // Leave headroom above the initial RSP: at a real process entry, [rsp]
         // holds a return address and callers' frames live at higher addresses.
@@ -197,7 +248,7 @@ impl GowCpu {
             image_base,
             image_size: image_size as u64,
             image,
-            image_buf,
+            image_buf: Vec::new(), // owned by the shared-image registry (D015)
             stack_buf: stack,
             func_map: HashMap::new(),
             teb,
@@ -296,21 +347,21 @@ pub unsafe extern "C" fn gow_test_cc(cpu: *mut GowCpu, cc: u32) -> u64 {
     );
     let r = match cc {
         0x0 => of,                                 // O
-        0x1 => !of,                                // NO
-        0x2 => cf,                                 // B / C
-        0x3 => !cf,                                // AE / NC
-        0x4 => zf,                                 // E / Z
-        0x5 => !zf,                                // NE / NZ
-        0x6 => cf || zf,                           // BE
-        0x7 => !cf && !zf,                         // A
-        0x8 => sf,                                 // S
-        0x9 => !sf,                                // NS
-        0xa => pf,                                 // P
-        0xb => !pf,                                // NP
-        0xc => sf != of,                           // L
-        0xd => sf == of,                           // GE
-        0xe => zf || (sf != of),                   // LE
-        0xf => !zf && (sf == of),                  // G
+        0x1 => !of,                               // NO
+        0x2 => cf,                                // B / C
+        0x3 => !cf,                               // AE / NC
+        0x4 => zf,                                // E / Z
+        0x5 => !zf,                               // NE / NZ
+        0x6 => cf || zf,                          // BE
+        0x7 => !cf && !zf,                        // A
+        0x8 => sf,                                // S
+        0x9 => !sf,                               // NS
+        0xa => pf,                                // P
+        0xb => !pf,                               // NP
+        0xc => sf != of,                          // L
+        0xd => sf == of,                          // GE
+        0xe => zf || (sf != of),                  // LE
+        0xf => !zf && (sf == of),                 // G
         _ => false,
     };
     if r { 1 } else { 0 }
@@ -554,9 +605,19 @@ pub unsafe extern "C" fn gow_call_indirect(cpu: *mut GowCpu, target_va: u64) {
         c.next_rva = rva;
     } else {
         c.missing_indirect_calls += 1;
-        if c.missing_indirect_calls <= 64 {
-            crate::glog!("[gow.MISSCALL] indirect target_va=0x{target_va:x} (rva would be 0x{:x})",
-                target_va.wrapping_sub(c.image_base));
+        // Dedup: a retry loop hitting the same dead pointer must not flood the
+        // log (the old per-occurrence cap produced megabytes per minute on a
+        // hot error loop). Each distinct target logs once, capped at 64.
+        let should_log = {
+            let mut seen = misscall_seen().lock().unwrap();
+            seen.len() < 64 && seen.insert(target_va)
+        };
+        if should_log {
+            // Include the calling function's RVA: with the target address
+            // alone you cannot tell WHICH null vtable/import slot was called.
+            crate::glog!("[gow.MISSCALL] indirect target_va=0x{target_va:x} (rva would be 0x{:x}) from rva=0x{:x}",
+                target_va.wrapping_sub(c.image_base),
+                c.rip.wrapping_sub(c.image_base));
         }
         c.next_rva = STOP_RVA;
     }
@@ -654,6 +715,12 @@ static IMPORT_RESOLVER: std::sync::OnceLock<
 
 pub fn set_import_resolver(r: std::sync::Arc<crate::win32::ImportResolver>) {
     let _ = IMPORT_RESOLVER.set(Some(r));
+}
+
+/// The process-wide import resolver (installed once by the JNI loader).
+/// Hostcall thunks created by GetProcAddress fetch it here to dispatch by name.
+pub fn import_resolver() -> Option<std::sync::Arc<crate::win32::ImportResolver>> {
+    IMPORT_RESOLVER.get().and_then(|o| o.clone())
 }
 
 // ---------------------------------------------------------------------------
@@ -1423,11 +1490,37 @@ pub unsafe extern "C" fn gow_cmps(cpu: *mut GowCpu, size: u32) {
     c.gpr.rdi = c.gpr.rdi.wrapping_add(step);
 }
 
-/// Background sampler: every 2 s, log the guest RVA the game is at, so a hang
-/// (e.g. stuck before D3D11CreateDevice) is visible without a debugger.
+/// The CPU the background sampler thread reads (set once, never cleared).
+static SAMPLER_CPU: AtomicUsize = AtomicUsize::new(0);
+
+/// Whether `cpu` is the one the background sampler keeps reading after the
+/// entry point returns. The JNI layer leaks that CPU (one per process) instead
+/// of freeing memory the sampler still touches.
+pub fn is_sampler_cpu(cpu: *const GowCpu) -> bool {
+    SAMPLER_CPU.load(Ordering::Relaxed) == cpu as usize
+}
+
+/// Resident set size in KiB (Linux/Android procfs; 0 when unavailable).
+fn rss_kb() -> u64 {
+    if let Ok(s) = std::fs::read_to_string("/proc/self/status") {
+        for line in s.lines() {
+            if let Some(rest) = line.strip_prefix("VmRSS:") {
+                let t = rest.trim().trim_end_matches("kB").trim();
+                if let Ok(v) = t.parse::<u64>() { return v; }
+            }
+        }
+    }
+    0
+}
+
+/// Background sampler: every 2 s, log the guest RVA the game is at plus the
+/// process RSS, so both a hang (e.g. stuck before D3D11CreateDevice) and a
+/// memory leak are visible without a debugger. (The guest-heap figures are
+/// logged by the allocator itself in big growth steps — see `win32.rs`.)
 fn start_sampler(cpu: *mut GowCpu) {
     static STARTED: std::sync::Once = std::sync::Once::new();
     STARTED.call_once(|| {
+        SAMPLER_CPU.store(cpu as usize, Ordering::Relaxed);
         let addr = cpu as usize;
         std::thread::spawn(move || loop {
             std::thread::sleep(std::time::Duration::from_secs(2));
@@ -1435,9 +1528,10 @@ fn start_sampler(cpu: *mut GowCpu) {
             let c = unsafe { &*cpu };
             if c.rip != 0 {
                 crate::glog!(
-                    "[gow.sample] rva=0x{:x} rsp=0x{:x} rbp=0x{:x} calls_missed={} unimpl={}",
+                    "[gow.sample] rva=0x{:x} rsp=0x{:x} rbp=0x{:x} calls_missed={} unimpl={} rss={}MiB",
                     c.rip.wrapping_sub(c.image_base), c.gpr.rsp, c.gpr.rbp,
-                    c.missing_indirect_calls, c.unimpl_hits
+                    c.missing_indirect_calls, c.unimpl_hits,
+                    rss_kb() / 1024
                 );
             }
         });
