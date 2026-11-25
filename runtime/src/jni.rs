@@ -462,6 +462,12 @@ fn run_game_library(path: CString, pdir: &str, gdir: &str, image_base: u64, imag
     // allocates its per-thread state here; skipping them leaves the TLS array
     // empty and later code dereferences null slots.
     if let Some(info) = &pe_info {
+        // The main CPU was created BEFORE load_into() registered the TLS
+        // template, so its TLS block is still zero — copy the template in now
+        // (D023). Thread spawns get it from GowCpu::new.
+        unsafe {
+            crate::dispatch::refresh_tls_template(cpu.as_mut() as *mut crate::dispatch::GowCpu);
+        }
         for cb in &info.tls_callbacks {
             let rva = (*cb).wrapping_sub(image_base);
             if rva < 0xffff_ffff {

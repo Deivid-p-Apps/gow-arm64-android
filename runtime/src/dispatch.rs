@@ -192,6 +192,22 @@ fn tls_template() -> Option<(u64, u32)> {
     *tls_template_slot().lock().unwrap()
 }
 
+/// Copy the module TLS template into the given CPU's module-0 TLS slot. Used by
+/// the JNI loader to patch the MAIN cpu, which is created before the PE (and
+/// hence the template) is loaded. Thread spawns do this inside GowCpu::new.
+pub unsafe fn refresh_tls_template(cpu: *mut GowCpu) {
+    let Some((tva, tsize)) = tls_template() else { return; };
+    if tsize == 0 { return; }
+    let c = &*cpu;
+    if c.teb == 0 { return; }
+    let tls_ptr = *((c.teb + 0x58) as *const u64);
+    if tls_ptr == 0 { return; }
+    let slot0 = *(tls_ptr as *const u64);
+    if slot0 == 0 { return; }
+    let n = (tsize as usize).min(0x1000);
+    std::ptr::copy_nonoverlapping(tva as *const u8, slot0 as *mut u8, n);
+}
+
 /// Map (or reuse) the guest image at `base`. Returns (pointer, mapped_at_fixed).
 fn map_at_shared(base: u64, size: usize) -> (*mut u8, bool) {
     let mut map = shared_images().lock().unwrap();
@@ -227,6 +243,16 @@ pub fn memfault_seen(rva: u64, addr: u64) -> bool {
     // Hard cap so a pathological run cannot grow this without bound.
     if g.len() >= 4096 { return false; }
     g.insert((rva, addr))
+}
+
+/// True the FIRST time a given RVA is dispatched with no lifted entry. Dedups
+/// the otherwise-silent gap so the log names the exact function that is missing.
+pub fn missing_entry_seen(rva: u32) -> bool {
+    static S: OnceLock<Mutex<std::collections::HashSet<u32>>> = OnceLock::new();
+    let seen = S.get_or_init(|| Mutex::new(std::collections::HashSet::new()));
+    let mut g = match seen.lock() { Ok(g) => g, Err(p) => p.into_inner() };
+    if g.len() >= 512 { return false; }
+    g.insert(rva)
 }
 
 /// Function table emitted by the recompiler (gow_game.c) is registered at
@@ -1714,6 +1740,12 @@ fn start_sampler(cpu: *mut GowCpu) {
                     c.missing_indirect_calls, c.unimpl_hits,
                     rss_kb() / 1024
                 );
+                // Show the recent guest call ring for the MAIN cpu so a hang can
+                // be traced to the exact call path, not just a single RVA.
+                let t = format_trace(c);
+                if !t.is_empty() {
+                    crate::glog!("[gow.sample.trace] {t}");
+                }
             }
         });
     });
@@ -1744,6 +1776,14 @@ pub unsafe extern "C" fn gow_run(cpu: *mut GowCpu, entry_rva: u32) {
                 // in-image target without a lifted function: try reading the first
                 // bytes; if it is not a known entry we stop loudly.
                 c.unimpl_hits += 1;
+                // Log each distinct missing entry once (dedup): this is the
+                // SILENT coverage hole (a computed/indirect target that landed
+                // mid-function or in a gap). The old code only bumped the count,
+                // so the log showed unimpl=N with no clue which RVA.
+                if missing_entry_seen(rva) {
+                    crate::glog!("[gow.MISSFN] dispatch to rva=0x{rva:x} — no lifted entry (from rip=0x{:x})",
+                        c.rip.wrapping_sub(c.image_base));
+                }
             }
         }
         steps += 1;

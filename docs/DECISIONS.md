@@ -104,3 +104,11 @@ store em `rcx=0` no rva 0x400cbb, via `gs:[0x58]` -> `[*tlsp]` -> `[[tls]+0x28]`
 Além de D020/D022/D023: `getenv`/`wcstombs`/`mbstowcs` implementados (apareciam
 como "unimplemented" no boot); log de `badload`/`badstore` com dedup por
 `(rva, addr)` (um loop corrompido gerava 455 MB de log e enterrava a causa raiz).
+
+## D025 — Diagnóstico do hang: MISSFN + trace no sampler + template TLS do CPU main
+O loop de dispatch incrementava `unimpl` quando um rva não tinha entrada liftada,
+mas NÃO logava — então "unimpl=2495" não dizia qual função faltava. Agora loga
+`[gow.MISSFN]` uma vez por rva. O sampler também imprime o anel de chamadas
+(`[gow.sample.trace]`) do CPU principal. E `refresh_tls_template` copia o template
+TLS para o bloco do CPU principal, que é criado ANTES do `load_into` (o template
+só era aplicado nos threads novos).
