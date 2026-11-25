@@ -613,8 +613,11 @@ pub unsafe extern "C" fn gow_call_indirect(cpu: *mut GowCpu, target_va: u64) {
             seen.len() < 64 && seen.insert(target_va)
         };
         if should_log {
-            crate::glog!("[gow.MISSCALL] indirect target_va=0x{target_va:x} (rva would be 0x{:x})",
-                target_va.wrapping_sub(c.image_base));
+            // Include the calling function's RVA: with the target address
+            // alone you cannot tell WHICH null vtable/import slot was called.
+            crate::glog!("[gow.MISSCALL] indirect target_va=0x{target_va:x} (rva would be 0x{:x}) from rva=0x{:x}",
+                target_va.wrapping_sub(c.image_base),
+                c.rip.wrapping_sub(c.image_base));
         }
         c.next_rva = STOP_RVA;
     }
