@@ -53,7 +53,13 @@ pub unsafe fn call(cpu: *mut GowCpu, func: &str) -> bool {
             }
         }
         // --- heap (api-ms-win-crt-heap) ---
-        "malloc" => crate::win32::host_alloc(a0 as usize) as u64,
+        "malloc" => {
+            let p = crate::win32::host_alloc(a0 as usize);
+            if a0 >= (1024 * 1024) && std::env::var_os("GOW_MEMTRACE").is_some() {
+                crate::glog!("[gow.malloc] {} KiB -> {:p}", a0 / 1024, p);
+            }
+            p as u64
+        }
         "calloc" => {
             let n = (a0 as usize).saturating_mul(a1 as usize);
             let p = crate::win32::host_alloc(n);

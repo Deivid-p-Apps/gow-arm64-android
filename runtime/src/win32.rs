@@ -1879,6 +1879,16 @@ pub fn log_big_ranges() {
     crate::glog!("[gow.badstore] big_ranges({}): {}", list.len(), list.join(", "));
 }
 
+/// Pages we backed lazily OUTSIDE a reserved range (the engine's pool walks a
+/// free-list a little past the block). Remembering them is essential: without
+/// it, `plausible_mem` would back the same page on every access, and each
+/// `MAP_FIXED|MAP_ANONYMOUS` remap ZEROES it — the engine would read 0, write,
+/// read 0 forever (1.1M mmap/s observed in f_40a610).
+fn backed_pages() -> &'static Mutex<std::collections::HashSet<u64>> {
+    static T: OnceLock<Mutex<std::collections::HashSet<u64>>> = OnceLock::new();
+    T.get_or_init(|| Mutex::new(std::collections::HashSet::new()))
+}
+
 /// Lazily map the 4 KiB page holding `addr` if it is plausibly part of a range we
 /// reserved (or a modest margin past one). Windows keeps a VirtualAlloc reserve
 /// accessible to commit; the engine's memory manager walks a free-list that can
@@ -1890,31 +1900,44 @@ pub fn try_back_page(addr: u64) -> bool {
     const MARGIN: u64 = 8 * 1024 * 1024 * 1024; // plausible VA around a range
     let a = addr & 0x00ff_ffff_ffff_ffff;
     let page = a & !(PAGE - 1);
-    // Never back a page inside the guest image (that is real game data/code).
-    let image = crate::crashlog::image_range();
-    if let Some((lo, hi)) = image {
+    // Never touch the guest image (that is real game data/code).
+    if let Some((lo, hi)) = crate::crashlog::image_range() {
         if page >= lo && page < hi {
             return false;
         }
     }
-    // Only back a page that sits inside or within a (large) margin of one of OUR
-    // reserved ranges — never an arbitrary wild pointer (that would grow without
-    // bound). The engine's pool walks both a little before and well past its block.
-    let near = BIG_RANGES.iter().any(|(lo, hi)| {
-        page >= lo.saturating_sub(MARGIN) && page < hi.saturating_add(MARGIN)
-    });
+    let mut near = false;
+    for (lo, hi) in BIG_RANGES.iter() {
+        if page >= lo && page < hi {
+            // Already mapped by us (the original mmap covers the whole span):
+            // nothing to do, and never remap (MAP_FIXED|ANON would zero it).
+            return true;
+        }
+        if page >= lo.saturating_sub(MARGIN) && page < hi.saturating_add(MARGIN) {
+            near = true;
+        }
+    }
     if !near {
         return false;
+    }
+    // Already backed once: it is mapped and holds the guest's data. Return true
+    // without remapping (re-mapping would zero it and spin the engine).
+    {
+        let set = backed_pages().lock().unwrap_or_else(|e| e.into_inner());
+        if set.contains(&page) {
+            return true;
+        }
     }
     #[cfg(unix)]
     unsafe {
         let r = mmap(page as *mut u8, PAGE as usize, sys::PROT_READ | sys::PROT_WRITE,
                      sys::MAP_PRIVATE | sys::MAP_ANONYMOUS | sys::MAP_FIXED | sys::MAP_NORESERVE, -1, 0);
-        if std::env::var_os("GOW_MEMTRACE").is_some() {
-            let ranges: Vec<String> = BIG_RANGES.iter().map(|(lo,hi)| format!("0x{lo:x}-0x{hi:x}")).collect();
-            crate::glog!("[gow.back_page] page=0x{page:x} mmap={:p} ranges=[{}]", r, ranges.join(","));
-        }
         if r as isize != sys::MAP_FAILED {
+            backed_pages().lock().unwrap_or_else(|e| e.into_inner()).insert(page);
+            if std::env::var_os("GOW_MEMTRACE").is_some() {
+                crate::glog!("[gow.back_page] OUTSIDE page=0x{page:x} rva=0x{:x}",
+                    crate::crashlog::current_rva());
+            }
             return true;
         }
     }

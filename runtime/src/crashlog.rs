@@ -11,6 +11,17 @@ pub fn set_current_cpu(cpu: *mut GowCpu) {
     unsafe { CURRENT_CPU = cpu; }
 }
 
+/// RIP-relative guest address of the currently running CPU (diagnostics).
+pub fn current_rva() -> u64 {
+    unsafe {
+        if CURRENT_CPU.is_null() {
+            return 0;
+        }
+        let c = &*CURRENT_CPU;
+        c.rip.wrapping_sub(c.image_base)
+    }
+}
+
 /// The guest image [base, base+size) of the running CPU, if set. Used by the
 /// heap to refuse backing a page that would shadow real game code/data.
 pub fn image_range() -> Option<(u64, u64)> {
