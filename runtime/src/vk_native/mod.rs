@@ -30,6 +30,7 @@
 
 use std::ffi::c_void;
 
+pub mod bridge;
 pub mod d3d11;
 pub mod selftest;
 pub mod swapchain;
@@ -49,18 +50,43 @@ impl Backend {
     /// default and is logged once by the caller.
     pub fn from_env() -> Self {
         match std::env::var("GOW_GFX_BACKEND") {
-            Ok(v) if v.eq_ignore_ascii_case("native") => Backend::Native,
-            Ok(v) if v.eq_ignore_ascii_case("dxvk") => Backend::Dxvk,
-            Ok(v) => {
-                crate::glog!("[gow.vk.native] unknown GOW_GFX_BACKEND={v:?}; using dxvk");
-                Backend::Dxvk
-            }
+            Ok(v) => Self::parse(&v),
             Err(_) => Backend::Dxvk,
+        }
+    }
+
+    /// Pure selector, so the mapping is unit-testable without touching the
+    /// process environment. Default (and anything unrecognised) is DXVK.
+    pub fn parse(value: &str) -> Self {
+        if value.eq_ignore_ascii_case("native") {
+            Backend::Native
+        } else {
+            if !value.eq_ignore_ascii_case("dxvk") {
+                crate::glog!("[gow.vk.native] unknown GOW_GFX_BACKEND={value:?}; using dxvk");
+            }
+            Backend::Dxvk
         }
     }
 
     pub fn is_native(self) -> bool {
         matches!(self, Backend::Native)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backend_selection() {
+        assert_eq!(Backend::parse("native"), Backend::Native);
+        assert_eq!(Backend::parse("NATIVE"), Backend::Native);
+        assert_eq!(Backend::parse("dxvk"), Backend::Dxvk);
+        // Default for anything else: DXVK (never silently switch renderer).
+        assert_eq!(Backend::parse(""), Backend::Dxvk);
+        assert_eq!(Backend::parse("vulkan"), Backend::Dxvk);
+        assert!(Backend::Native.is_native());
+        assert!(!Backend::Dxvk.is_native());
     }
 }
 
@@ -146,6 +172,21 @@ fn cstr_name_contains(
 }
 
 impl NativeDevice {
+    /// Bring up Vulkan using an externally supplied `vkGetInstanceProcAddr`.
+    ///
+    /// This is the *exact* contract with libadrenotools: the loader it opens
+    /// gives us one `vkGetInstanceProcAddr`, and every entry point must come
+    /// from it so the instance is backed by the chosen driver (Turnip), not the
+    /// system loader. A raw ICD's `vk_icdGetInstanceProcAddr` works here too, so
+    /// the driver path can be tested off-device (see the probe example).
+    ///
+    /// # Safety
+    /// `gipa` must be a valid `vkGetInstanceProcAddr` that stays alive for the
+    /// lifetime of the returned device.
+    pub unsafe fn new_with_gipa(gipa: usize, window: *mut c_void) -> Option<Self> {
+        Self::bring_up(entry_from_gipa(gipa)?, window)
+    }
+
     /// Bring up Vulkan for `window`.
     ///
     /// * `window != null` -> `VK_KHR_surface` + `VK_KHR_android_surface`
@@ -154,7 +195,11 @@ impl NativeDevice {
     ///   by the Termux harness (no `ANativeWindow` outside an Android app).
     pub fn new(window: *mut c_void) -> Option<Self> {
         let entry = unsafe { load_entry()? };
+        Self::bring_up(entry, window)
+    }
 
+    /// Shared bring-up: instance -> physical device -> device -> queue -> surface.
+    fn bring_up(entry: ash::Entry, window: *mut c_void) -> Option<Self> {
         let inst_exts = unsafe { entry.enumerate_instance_extension_properties(None) }.ok()?;
         let want_android = !window.is_null();
         let surface_ext = if want_android {

@@ -134,3 +134,25 @@ FolderPath`, `GetDiskFreeSpaceExW` e um `MessageBox` de erro. Faltavam:
   "Not Enough Disk Space" em loop).
 - `GetDiskFreeSpaceW`, `setvbuf`, `LocalAlloc/Free`, `CoTaskMemAlloc/Free`,
   `GetConsoleWindow`/`ShowWindow`/`DestroyWindow`/`FreeConsole`.
+
+## D028 — DXVK 3.1.1 rejeita o Turnip por `storageBuffer8BitAccess=0` (relaxado, estilo Sarek)
+Diagnóstico no aparelho (sonda que usa o MESMO `vkGetInstanceProcAddr` entregue ao
+DXVK): o driver é `Turnip Adreno (TM) 660 api=1.3.363`, ou seja É Vulkan 1.3 — mas
+`vkGetPhysicalDeviceFeatures2` retorna `storageBuffer8BitAccess=0`. O DXVK 3.1.1
+tem essa feature como **obrigatória** (`ENABLE_FEATURE(vk12, storageBuffer8Bit
+Access, true)`), então rejeita o adapter ("Skipping: Device does not support
+required feature") → `No adapters found` → `CreateDXGIFactory1 -> 0x80004005`.
+
+A comunidade resolve isso com o **DXVK-Sarek** (pythonlover02/DXVK-Sarek), que
+marca exatamente essas exigências como opcionais em GPUs mobile. O patch
+`tools/patches/0006` faz o mesmo no DXVK 3.1.1:
+- `GOW_RELAX(require)` torna todas as features/extensões obrigatórias **opcionais**
+  (as que o driver suporta continuam sendo habilitadas; só o portão de boot sai);
+- o gate de apiVersion cai para 1.1;
+- o gate de 256 bytes de push-constant (Turnip expõe 128) é relaxado.
+Assim uma feature ausente vira glitch de render, não falha de inicialização.
+
+## D029 — DXVK-Native continua o backend padrão? Não: backend NATIVO em paralelo
+Além do DXVK (patch 0006), o projeto ganha um backend Vulkan **nativo em Rust**
+(sem tradução D3D11), selecionável por env var, para não depender do DXVK. Os dois
+coexistem; a seleção é por `GOW_GFX_BACKEND` (default `dxvk`).

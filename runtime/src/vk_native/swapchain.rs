@@ -101,15 +101,12 @@ impl Swapchain {
         }
         images = images.min(3);
 
-        let mut queue_family_indices = [dev.families.graphics, dev.families.present];
-        let (sharing_mode, queue_ptr, queue_count) = if dev.families.graphics
-            == dev.families.present
-        {
-            (vk::SharingMode::EXCLUSIVE, std::ptr::null(), 0u32)
+        let queue_family_indices = [dev.families.graphics, dev.families.present];
+        let (sharing_mode, queue_count) = if dev.families.graphics == dev.families.present {
+            (vk::SharingMode::EXCLUSIVE, 0u32)
         } else {
             (
                 vk::SharingMode::CONCURRENT,
-                queue_family_indices.as_mut_ptr(),
                 queue_family_indices.len() as u32,
             )
         };
@@ -129,7 +126,6 @@ impl Swapchain {
             .present_mode(present_mode)
             .clipped(true)
             .old_swapchain(vk::SwapchainKHR::null());
-        let _ = queue_ptr;
 
         let loader = ash::khr::swapchain::Device::new(inst, &dev.device);
         let swapchain = unsafe {

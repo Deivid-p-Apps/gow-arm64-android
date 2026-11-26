@@ -18,12 +18,43 @@ use std::ffi::c_void;
 /// Run the full bring-up + N clear/present frames. `window == null` selects the
 /// headless surface. Returns 0 on success, a `VkResult`-ish code on failure.
 pub fn run(window: *mut c_void, frames: u32, log: &mut dyn FnMut(&str)) -> i32 {
+    run_inner(None, window, frames, log)
+}
+
+/// Like [`run`], but resolves every entry point through an externally supplied
+/// `vkGetInstanceProcAddr` (the exact libadrenotools contract). Used by the
+/// probe to prove the external-GIPA path: the caller does
+/// `dlopen(libvulkan_freedreno.so)` -> `dlsym(vk_icdGetInstanceProcAddr)` and
+/// hands the pointer here, and the whole instance/device/swapchain is then
+/// backed by that driver.
+pub fn run_with_gipa(
+    gipa: usize,
+    window: *mut c_void,
+    frames: u32,
+    log: &mut dyn FnMut(&str),
+) -> i32 {
+    run_inner(Some(gipa), window, frames, log)
+}
+
+fn run_inner(
+    gipa: Option<usize>,
+    window: *mut c_void,
+    frames: u32,
+    log: &mut dyn FnMut(&str),
+) -> i32 {
     macro_rules! l {
         ($($a:tt)*) => { log(&format!($($a)*)) };
     }
 
-    l!("[selftest] native Vulkan bring-up (window={window:p})");
-    let Some(dev) = NativeDevice::new(window) else {
+    l!(
+        "[selftest] native Vulkan bring-up (window={window:p} gipa={:?})",
+        gipa
+    );
+    let dev = match gipa {
+        Some(g) => unsafe { NativeDevice::new_with_gipa(g, window) },
+        None => NativeDevice::new(window),
+    };
+    let Some(dev) = dev else {
         l!("[selftest] FAIL: NativeDevice::new");
         return -1;
     };
@@ -85,5 +116,18 @@ pub fn run(window: *mut c_void, frames: u32, log: &mut dyn FnMut(&str)) -> i32 {
 pub unsafe extern "C" fn gow_vk_native_selftest(window: *mut c_void, frames: u32) -> i32 {
     let rc = run(window, frames.max(1), &mut |m| crate::glog!("{m}"));
     crate::glog!("[selftest] gow_vk_native_selftest -> {rc}");
+    rc
+}
+
+/// Same, but with an external `vkGetInstanceProcAddr` from the caller.
+#[cfg(feature = "vkprobe")]
+#[no_mangle]
+pub unsafe extern "C" fn gow_vk_native_selftest_gipa(
+    gipa: usize,
+    window: *mut c_void,
+    frames: u32,
+) -> i32 {
+    let rc = run_with_gipa(gipa, window, frames.max(1), &mut |m| crate::glog!("{m}"));
+    crate::glog!("[selftest] gow_vk_native_selftest_gipa -> {rc}");
     rc
 }
