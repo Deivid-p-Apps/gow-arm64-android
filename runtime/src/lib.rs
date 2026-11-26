@@ -15,6 +15,9 @@ pub mod adrenotools;
 pub mod dxbc;
 pub mod threads;
 pub mod vk;
+// Native Vulkan renderer, the alternative to DXVK (GOW_GFX_BACKEND=native).
+// New, self-contained module; the DXVK path in graphics.rs is unchanged.
+pub mod vk_native;
 pub mod steam;
 pub mod sse_extra;
 pub mod x87;
