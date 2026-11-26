@@ -786,10 +786,13 @@ pub fn plausible_mem(addr: u64, len: u64) -> bool {
     // The remaining tags are all *plausible* in principle, but the guest can
     // still compute a pointer that lands in an UNMAPPED hole (a heap overrun,
     // an MTE tag mismatch, an off-by-N). `str`/`ldr` there faults the host and
-    // kills the run. Ask the kernel whether the page(s) are mapped (mincore is
-    // a direct syscall, ~ns, and exact) so the fault becomes a logged
+    // kills the run. Back the page lazily when it belongs to one of our reserves,
+    // then verify with /proc/self/maps so the fault becomes a logged
     // badload/badstore and the engine keeps running — the same policy as the
     // other validators.
+    if crate::win32::try_back_page(addr) {
+        return true;
+    }
     is_mapped(addr, len)
 }
 
