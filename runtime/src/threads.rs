@@ -222,7 +222,8 @@ impl ThreadTable {
             let c = Box::into_raw(cpu);
             for (rva, f) in map { (*c).func_map.insert(rva, f); }
             (*c).gpr.rcx = param;
-            log_line(&format!("[gow.thread] start rva=0x{start_rva:x} param=0x{param:x} tid={tid}"));
+            log_line(&format!("[gow.thread] start rva=0x{start_rva:x} param=0x{param:x} caller_rva=0x{:x} tid={tid}",
+                crate::crashlog::current_rva()));
             crate::dispatch::gow_run(c, start_rva as u32);
             // Thread finished: wake anyone waiting on the handle (D019).
             *finished.0.lock().unwrap() = true;

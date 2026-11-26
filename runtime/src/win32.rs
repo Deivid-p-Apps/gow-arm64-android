@@ -164,6 +164,9 @@ impl ImportResolver {
                     }
                     p = host_alloc_pages(a1 as usize);
                 }
+                if std::env::var_os("GOW_MEMTRACE").is_some() || (p.is_null() && a1 >= (1024 * 1024)) {
+                    crate::glog!("[gow.heap] VirtualAlloc(base=0x{a0:x}, size=0x{a1:x}, type=0x{a2:x}) -> 0x{:x}", p as u64);
+                }
                 c.gpr.rax = p as u64;
                 true
             }
@@ -831,7 +834,8 @@ impl ImportResolver {
                 // stay alive.
                 let n = MISSING.fetch_add(1, Ordering::Relaxed);
                 if n < 8 {
-                    crate::glog!("[gow.win32] TerminateProcess(0x{a0:x}, {a1}) ignored — process kept alive for the port");
+                    crate::glog!("[gow.win32] TerminateProcess(0x{a0:x}, status=0x{a1:x}) ignored — caller_rva=0x{:x} rsp=0x{:x}",
+                        crate::crashlog::current_rva(), c.gpr.rsp);
                 }
                 c.gpr.rax = 1;
                 true
@@ -1515,7 +1519,17 @@ unsafe fn read_cstr(ptr: u64, wide: bool) -> String {
 // free, exactly like on Windows.
 
 #[derive(Clone, Copy)]
-struct Block { size: usize, align: usize, mmap: bool }
+struct Block { size: usize, alloc: usize, align: usize, mmap: bool }
+
+/// Guard bytes placed before and after each committed (malloc-backed) block.
+/// The guest's Win32 code freely writes a few bytes before/after a buffer (MSVC
+/// `_aligned_malloc` stores its base pointer at `p-8`; several engine routines
+/// round-trip small header structs just outside the allocation). Without slack
+/// that lands in the native allocator's (scudo) metadata header and the later
+/// `free` aborts the whole process with `reportHeaderCorruption`. The redzone
+/// absorbs those accesses.
+const GUARD: usize = 64;
+fn guard_head(align: usize) -> usize { if align > GUARD { align } else { GUARD } }
 
 #[cfg(unix)]
 extern "C" {
@@ -1661,15 +1675,19 @@ fn heap_alloc_raw(size: usize, align: usize, page: bool) -> *mut u8 {
         }
         return std::ptr::null_mut();
     }
-    let layout = match std::alloc::Layout::from_size_align(size, align) {
+    let layout = match std::alloc::Layout::from_size_align(size + GUARD + guard_head(align), align) {
         Ok(l) => l,
         Err(_) => return std::ptr::null_mut(),
     };
     // Zeroed on purpose: the game's error paths are full of uninitialized-read
     // assumptions that pass on Windows' fresh pages.
-    let p = unsafe { std::alloc::alloc_zeroed(layout) };
-    if p.is_null() { return p; }
-    alloc_table().lock().unwrap().insert(p as usize, Block { size, align, mmap: false });
+    let raw = unsafe { std::alloc::alloc_zeroed(layout) };
+    if raw.is_null() { return raw; }
+    // Hand the guest a pointer GUARD bytes into the block, leaving guard bytes
+    // free on both sides so small over/under-runs do not corrupt the native
+    // allocator's metadata (the scudo reportHeaderCorruption abort).
+    let p = unsafe { raw.add(guard_head(align)) };
+    alloc_table().lock().unwrap().insert(p as usize, Block { size, alloc: raw as usize, align, mmap: false });
     if size >= (1024 * 1024) {
         register_big_range(p as u64, p as u64 + size as u64);
     }
@@ -1743,7 +1761,7 @@ fn mmap_reserve(size: usize) -> *mut u8 {
         unsafe { munmap(raw, head as usize); }
     }
     let p = aligned as *mut u8;
-    alloc_table().lock().unwrap().insert(p as usize, Block { size: map_size, align: PAGE, mmap: true });
+    alloc_table().lock().unwrap().insert(p as usize, Block { size: map_size, alloc: p as usize, align: PAGE, mmap: true });
     // Publish the WHOLE mapped range (including slack) so the validator accepts
     // the pool's slightly-past-the-end accesses.
     register_big_range(p as u64, p as u64 + map_size as u64);
@@ -1773,8 +1791,9 @@ fn heap_free_raw(p: *mut u8) -> bool {
                 unsafe { munmap(p, b.size); }
                 RESERVED_BYTES.fetch_sub(b.size, Ordering::Relaxed);
             } else {
-                if let Ok(layout) = std::alloc::Layout::from_size_align(b.size, b.align) {
-                    unsafe { std::alloc::dealloc(p, layout) };
+                let raw = b.alloc as *mut u8;
+                if let Ok(layout) = std::alloc::Layout::from_size_align(b.size + GUARD + guard_head(b.align), b.align) {
+                    unsafe { std::alloc::dealloc(raw, layout) };
                 }
                 LIVE_BYTES.fetch_sub(b.size, Ordering::Relaxed);
                 LIVE_BLOCKS.fetch_sub(1, Ordering::Relaxed);
