@@ -87,9 +87,12 @@ fn heap_big_reservation_is_lazy_and_freeable() {
     let reserved_before = gow_runtime::win32::heap_reserved();
     let p = gow_runtime::win32::host_alloc_pages(64 * 1024 * 1024);
     assert!(!p.is_null(), "64 MiB reservation failed");
-    assert_eq!(
-        gow_runtime::win32::heap_reserved(),
-        reserved_before + 64 * 1024 * 1024,
+    // The reserve now also carries an alignment/slack margin (the engine's pool
+    // can step a little past the block, so mmap_reserve over-maps and the
+    // validator backs any remaining page lazily). Assert the accounting grew by
+    // at least the requested size.
+    assert!(
+        gow_runtime::win32::heap_reserved() >= reserved_before + 64 * 1024 * 1024,
         "reservation not accounted"
     );
     unsafe {

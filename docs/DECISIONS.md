@@ -169,3 +169,21 @@ MISSCALL. Agora:
 - `gow_call_indirect`, se o alvo cai numa faixa registrada, faz o marshaling dos
   registradores MS-x64 do guest para a chamada host e guarda o retorno em RAX
   (o mesmo caminho já usado para imports da IAT).
+
+## D031 — Pool de VRAM do engine além do bloco: páginas mapeadas sob demanda + bug de registrador
+Comparando com o DXVK (que também trava, mas NUNCA falha nesse ponto), achei a causa
+do aborto em `f_40a610`: o gerenciador de VRAM do engine monta uma free-list andando
+em chunks de 0x10000 e acessa alguns GiB ALÉM do bloco que recebeu; nosso heap
+mmap não tinha nada mapeado lá, então o store dava SIGSEGV e abortava o boot.
+
+Correções:
+- `gow_load`/`gow_store`: quando a página pertence (ou está a ≤8 GiB de) uma reserva
+  nossa, fazem `mmap(MAP_FIXED)` dessa única página e repetem — igual ao Windows, onde
+  um reserve de `VirtualAlloc` é VA válido. Nunca mapeia dentro da imagem do jogo.
+- Bug real: `kernel32!malloc` compartilhava o handler de `HeapAlloc` e lia o tamanho
+  de R8 em vez de RCX, então um `malloc(32 MiB)` devolvia um bloco de tamanho errado.
+- `VirtualAlloc` ganha um pequeno slack e alinhamento de 64 KiB (granularidade).
+
+Resultado (host runner, Turnip): o jogo REAL passa do `f_40a610`, roda o `_initterm`
+completo e entra no loop de jobs com as 6 threads de trabalho — sem abortar
+(exit=timeout, não SIGSEGV). Antes: SIGSEGV antes de qualquer thread.
