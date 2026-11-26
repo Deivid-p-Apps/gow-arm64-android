@@ -204,7 +204,7 @@ pub unsafe fn refresh_tls_template(cpu: *mut GowCpu) {
     if tls_ptr == 0 { return; }
     let slot0 = *(tls_ptr as *const u64);
     if slot0 == 0 { return; }
-    let n = (tsize as usize).min(0x1000);
+    let n = (tsize as usize).min(0x10000);
     std::ptr::copy_nonoverlapping(tva as *const u8, slot0 as *mut u8, n);
 }
 
@@ -290,6 +290,15 @@ pub unsafe fn host_boot_with_table(game_dir: &str, table: *const GowFuncEntry) -
     }
     crate::glog!("[host] registry: {} functions", entries.len());
     install_registry(entries);
+    eprintln!("[host] after registry install");
+
+    // Opt-in crash diagnostics on the host (the device build disables it because
+    // ART wraps sigaction). GOW_CRASHLOG=1 installs the SIGSEGV logger so a host
+    // crash points at the exact guest RVA.
+    if std::env::var_os("GOW_CRASHLOG").is_some() {
+        crate::crashlog::install();
+        crate::glog!("[host] crashlog installed");
+    }
 
     // Enable file logging so the full boot trace is readable (the host runner
     // has no logcat). Writes gow-<pid>.log under the Port dir when present.
@@ -299,6 +308,7 @@ pub unsafe fn host_boot_with_table(game_dir: &str, table: *const GowFuncEntry) -
         game_dir.to_string()
     };
     crate::log::set_file_logging(true, &logdir);
+    eprintln!("[host] file logging enabled in {logdir}");
 
     // PE metadata for the real game (fixed from the .exe header).
     let image_base = 0x140000000u64;
@@ -316,6 +326,17 @@ pub unsafe fn host_boot_with_table(game_dir: &str, table: *const GowFuncEntry) -
         crate::glog!("[host] WARNING: no manifest.json in {game_dir}");
     }
     set_import_resolver(std::sync::Arc::new(res));
+
+    // Bring up the graphics backend so the game's D3D11 calls are handled. On
+    // the host the DXVK .so are not in an APK; GOW_GFX_BACKEND=native selects the
+    // built-in renderer (no DXVK needed), which is how the host loop drives the
+    // real game into its render path.
+    if crate::vk_native::bridge::is_enabled() {
+        crate::glog!("[host] GOW_GFX_BACKEND=native: creating native backend");
+        if !crate::vk_native::bridge::create() {
+            crate::glog!("[host] native backend creation failed (continuing)");
+        }
+    }
 
     let mut cpu = GowCpu::new(image_base, image_size as usize);
     let exe = format!("{game_dir}/GodOfWar/GoW.exe");
@@ -389,9 +410,16 @@ impl GowCpu {
             // code like `mov rax,[gs:0x58]; mov rdx,[rax]; mov [rdx+0x80],..` fault.
             std::ptr::write_bytes(tls_ptr as *mut u8, 0, 0x800);
             for i in 0..128u64 {
-                let blk = alloc_guest_block(0x1000);
+                // 1 MiB per module TLS block. The image template alone is 0x11f0,
+                // and the CRT keeps a growable per-module array past it
+                // (`[tls + 0xf8 + idx*8]`, where idx is a live counter). 4 KiB was
+                // far too small and 64 KiB still overflowed in the engine's
+                // GPU/VRAM probe (f_40a610) on Android, where the block is a
+                // tagged scudo allocation whose end is a hard wall. 1 MiB is
+                // cheap (lazy/zeroed) and gives the counter enormous headroom.
+                let blk = alloc_guest_block(0x100000);
                 if !blk.is_null() {
-                    std::ptr::write_bytes(blk, 0, 0x1000);
+                    std::ptr::write_bytes(blk, 0, 0x100000);
                     *((tls_ptr + i * 8) as *mut u64) = blk as u64;
                 }
             }
@@ -405,7 +433,7 @@ impl GowCpu {
             if let Some((tva, tsize)) = tls_template() {
                 let slot0 = *((tls_ptr) as *const u64);
                 if slot0 != 0 && tsize > 0 {
-                    let n = (tsize as usize).min(0x1000);
+                    let n = (tsize as usize).min(0x10000);
                     std::ptr::copy_nonoverlapping(tva as *const u8, slot0 as *mut u8, n);
                 }
             }
@@ -606,6 +634,18 @@ pub unsafe extern "C" fn gow_test_cc(cpu: *mut GowCpu, cc: u32) -> u64 {
 #[no_mangle]
 pub unsafe extern "C" fn gow_load(cpu: *mut GowCpu, addr: u64, size: u32) -> u64 {
     if !plausible_mem(addr, size as u64) {
+        // Mirror gow_store: back a page that belongs to (or sits just past) one
+        // of our reserves, then read it, so the engine's pool walk does not abort.
+        if crate::win32::try_back_page(addr) {
+            let p = addr as *const u8;
+            return match size {
+                1 => *p as u64,
+                2 => (p as *const u16).read_unaligned() as u64,
+                4 => (p as *const u32).read_unaligned() as u64,
+                8 => (p as *const u64).read_unaligned(),
+                _ => 0,
+            };
+        }
         let c = &*cpu;
         let rva = c.rip.wrapping_sub(c.image_base);
         // Dedup by (rva, addr): a hot loop hitting the same wild address must
@@ -629,12 +669,33 @@ pub unsafe extern "C" fn gow_load(cpu: *mut GowCpu, addr: u64, size: u32) -> u64
 #[no_mangle]
 pub unsafe extern "C" fn gow_store(cpu: *mut GowCpu, addr: u64, v: u64, size: u32) {
     if !plausible_mem(addr, size as u64) {
+        // The page may be inside an engine pool that spans a range we reserved
+        // but never touched, or just past it (the engine's VRAM manager sizes a
+        // free-list from a running counter and walks a few MiB past the block).
+        // Windows would have that VA mapped (a reserve is valid to commit); map
+        // it lazily here so the write lands instead of aborting the boot.
+        if crate::win32::try_back_page(addr) {
+            let p = addr as *mut u8;
+            match size {
+                1 => *p = v as u8,
+                2 => (p as *mut u16).write_unaligned(v as u16),
+                4 => (p as *mut u32).write_unaligned(v as u32),
+                8 => (p as *mut u64).write_unaligned(v),
+                _ => {}
+            }
+            return;
+        }
         let c = &*cpu;
         let rva = c.rip.wrapping_sub(c.image_base);
         if memfault_seen(rva, addr) {
             crate::glog!("[gow.badstore] store addr=0x{addr:x} size={size} rva=0x{rva:x} rsp=0x{:x} rbp=0x{:x} rdi=0x{:x} rsi=0x{:x} rcx=0x{:x} rax=0x{:x}",
                 c.gpr.rsp, c.gpr.rbp, c.gpr.rdi, c.gpr.rsi, c.gpr.rcx, c.gpr.rax);
             crate::glog!("[gow.trace] recent calls: {}", format_trace(c));
+            // Full register dump for the free-list builder (f_40a610): r13/r14/r15
+            // are the pool base/limit/stride, so the origin of a wild write is visible.
+            crate::glog!("[gow.badstore] regs r8=0x{:x} r9=0x{:x} r10=0x{:x} r11=0x{:x} r12=0x{:x} r13=0x{:x} r14=0x{:x} r15=0x{:x} rbx=0x{:x}",
+                c.gpr.r8, c.gpr.r9, c.gpr.r10, c.gpr.r11, c.gpr.r12, c.gpr.r13, c.gpr.r14, c.gpr.r15, c.gpr.rbx);
+            crate::win32::log_big_ranges();
         }
         return;
     }
@@ -718,13 +779,93 @@ pub fn plausible_mem(addr: u64, len: u64) -> bool {
     // thunks; beyond that the range stays open (calls still dispatch through
     // the hostcall table).
     if (0x0000_0a00_0000_0000..0x0000_0a00_0001_0000).contains(&addr) { return false; }
-    // Reject only the wild/negative canonical range: top 16 bits all ones
-    // (0xffff_xxxx...) is the kernel/-1 range. Everything else (including the
-    // Android 0xb400_... tagged stack/heap addresses and the guest image at
-    // 0x1_40xx_xxxx) is allowed.
+    // Reject the wild/negative canonical range: top 16 bits all ones
+    // (0xffff_xxxx...) is the kernel/-1 range.
     let top = addr >> 48;
     if top == 0xffff { return false; }
-    true
+    // The remaining tags are all *plausible* in principle, but the guest can
+    // still compute a pointer that lands in an UNMAPPED hole (a heap overrun,
+    // an MTE tag mismatch, an off-by-N). `str`/`ldr` there faults the host and
+    // kills the run. Ask the kernel whether the page(s) are mapped (mincore is
+    // a direct syscall, ~ns, and exact) so the fault becomes a logged
+    // badload/badstore and the engine keeps running — the same policy as the
+    // other validators.
+    is_mapped(addr, len)
+}
+
+/// Cached table of writable/readable mappings from /proc/self/maps, with the
+/// top-byte address tag stripped (Android TBI/MTE: the guest holds
+/// `0xb400_007cfa7c3400` while the kernel maps `0x0000_7cfa7c3400`). A page can
+/// be mapped but PROT_NONE (a guard page), which mincore reports as present but
+/// a `str` there still faults — so permission matters, not just presence.
+fn is_mapped(addr: u64, len: u64) -> bool {
+    // Trust any address inside a block WE allocated (the arena, a VirtualAlloc,
+    // a guest TLS/heap block): those are mapped by construction, and
+    // /proc/self/maps on Android/MTE splits them with PROT_NONE guard granule
+    // pages that a kernel-level check would miss-report.
+    if crate::win32::addr_in_tracked_block(addr, len) {
+        return true;
+    }
+    // Strip the top-byte tag for comparisons against /proc/self/maps.
+    let untag = |a: u64| a & 0x00ff_ffff_ffff_ffff;
+    let a = untag(addr);
+    let b = untag(addr.wrapping_add(len.max(1)));
+    {
+        let g = mapped_regions().lock().unwrap_or_else(|e| e.into_inner());
+        if g.iter().any(|&(lo, hi)| a >= lo && b <= hi) {
+            return true;
+        }
+    }
+    refresh_maps();
+    let g = mapped_regions().lock().unwrap_or_else(|e| e.into_inner());
+    let hit = g.iter().find(|&(lo, hi)| a >= *lo && b <= *hi).copied();
+    if std::env::var_os("GOW_MEMTRACE").is_some() {
+        match hit {
+            Some((lo, hi)) => crate::glog!("[gow.memtrace] mapped addr=0x{addr:x} real=0x{a:x} in [0x{lo:x},0x{hi:x})"),
+            None => crate::glog!("[gow.memtrace] unmapped addr=0x{addr:x} (real 0x{a:x}) len={len} regions={}", g.len()),
+        }
+    }
+    hit.is_some()
+}
+
+/// Reload the writable-region cache from /proc/self/maps (rate-limited: only a
+/// genuine miss triggers it, and at most every 200 ms, so the heap growing at
+/// boot is picked up without a parse per access).
+fn refresh_maps() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static LAST: AtomicU64 = AtomicU64::new(0);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    if now.saturating_sub(LAST.load(Ordering::Relaxed)) < 200 {
+        return;
+    }
+    LAST.store(now, Ordering::Relaxed);
+    let Ok(maps) = std::fs::read_to_string("/proc/self/maps") else { return };
+    let mut regions: Vec<(u64, u64)> = Vec::with_capacity(512);
+    for line in maps.lines() {
+        // "<start>-<end> <perms> <off> <dev> <inode> <path>"
+        let mut it = line.split_whitespace();
+        let (Some(range), Some(perms)) = (it.next(), it.next()) else { continue };
+        // Only regions the guest may write (heap/stack/anon/data). A PROT_NONE
+        // guard page (---p) or an execute-only/text page is not writable.
+        if !(perms.starts_with("rw") || perms.starts_with("r-")) {
+            continue;
+        }
+        let Some((lo, hi)) = range.split_once('-') else { continue };
+        if let (Ok(lo), Ok(hi)) = (u64::from_str_radix(lo, 16), u64::from_str_radix(hi, 16)) {
+            regions.push((lo, hi));
+        }
+    }
+    let g = mapped_regions();
+    let mut g = g.lock().unwrap_or_else(|e| e.into_inner());
+    *g = regions;
+}
+
+fn mapped_regions() -> &'static std::sync::Mutex<Vec<(u64, u64)>> {
+    static R: std::sync::OnceLock<std::sync::Mutex<Vec<(u64, u64)>>> = std::sync::OnceLock::new();
+    R.get_or_init(|| std::sync::Mutex::new(Vec::new()))
 }
 
 #[no_mangle]

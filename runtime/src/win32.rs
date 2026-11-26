@@ -134,6 +134,9 @@ impl ImportResolver {
         let dll_l = dll.to_ascii_lowercase();
         let handled = match (dll_l.as_str(), func) {
             ("kernel32.dll", "VirtualAlloc") => {
+                if a1 >= (1024 * 1024) && std::env::var_os("GOW_MEMTRACE").is_some() {
+                    crate::glog!("[gow.VirtualAlloc] base=0x{a0:x} size=0x{a1:x} type=0x{a2:x} prot=0x{a3:x}");
+                }
                 // VirtualAlloc(lpAddress, dwSize, flAllocationType, flProtect):
                 // lpAddress in RCX, dwSize in RDX. The old handler ignored
                 // lpAddress whenever dwSize != 0 — which is every real commit —
@@ -579,11 +582,22 @@ impl ImportResolver {
             ("ole32.dll", "CoTaskMemRealloc") => { c.gpr.rax = crate::win32::host_realloc(a0 as *mut u8, a1 as usize) as u64; true }
             ("kernel32.dll", "HeapCreate") => { c.gpr.rax = 0xdead0002; true }
             ("kernel32.dll", "HeapDestroy") => { c.gpr.rax = 1; true }
-            ("kernel32.dll", "HeapAlloc") | ("kernel32.dll", "malloc") => {
+            ("kernel32.dll", "HeapAlloc") => {
                 // HeapAlloc(hHeap, dwFlags, dwBytes): bytes in R8. Tracked, so
-                // HeapFree/HeapSize/HeapReAlloc know the block (D013). No more
-                // 4 KiB rounding of every small allocation.
-                c.gpr.rax = heap_alloc_raw(a2 as usize, 0x10, false) as u64;
+                // HeapFree/HeapSize/HeapReAlloc know the block (D013).
+                let p = heap_alloc_raw(a2 as usize, 0x10, false) as u64;
+                if a2 >= (1024 * 1024) && std::env::var_os("GOW_MEMTRACE").is_some() {
+                    crate::glog!("[gow.HeapAlloc] {} KiB -> 0x{p:x}", a2 / 1024);
+                }
+                c.gpr.rax = p;
+                true
+            }
+            ("kernel32.dll", "malloc") => {
+                // malloc(bytes): the size is arg 1 (RCX), NOT R8. Sharing the
+                // HeapAlloc handler here read the wrong register, so a 32 MiB
+                // malloc returned a tiny block — the engine's free-list then ran
+                // off the end (f_40a610 badstore / SIGSEGV).
+                c.gpr.rax = heap_alloc_raw(a0 as usize, 0x10, false) as u64;
                 true
             }
             ("kernel32.dll", "HeapReAlloc") => {
@@ -606,6 +620,38 @@ impl ImportResolver {
                 true
             }
             ("kernel32.dll", "HeapSetInformation") | ("kernel32.dll", "HeapCompact") => { c.gpr.rax = 1; true }
+            ("kernel32.dll", "GetLargePageMinimum") => {
+                // Windows returns 0 when large pages are unavailable; a real
+                // 2 MiB value makes the engine reserve huge pages that our
+                // virtual allocator cannot back. Answer 0 (not supported) — the
+                // truthful value here, not a fake success.
+                c.gpr.rax = 0; true
+            }
+            ("kernel32.dll", "GlobalMemoryStatusEx") => {
+                // MEMORYSTATUSEX: dwLength@0, dwMemoryLoad@4, ullTotalPhys@8,
+                // ullAvailPhys@0x10, ullTotalPageFile@0x18, ullAvailPageFile@0x20,
+                // ullTotalVirtual@0x28, ullAvailVirtual@0x30,
+                // ullAvailExtendedVirtual@0x38. The engine's VRAM/RAM probe reads
+                // these; leaving them 0 made its arena math degenerate and it
+                // overran a block (f_40a610 free-list). Report the host's real
+                // /proc/meminfo values plus a large virtual space.
+                if okp(a0, 64) {
+                    let b = a0 as *mut u8;
+                    *((b as *mut u32)) = 64;                 // dwLength
+                    let (total, avail) = host_meminfo();
+                    *((b.add(4)) as *mut u32) = if total > 0 {
+                        (100 - (avail * 100 / total)) as u32
+                    } else { 50 };
+                    *((b.add(8)) as *mut u64) = total;       // ullTotalPhys
+                    *((b.add(0x10)) as *mut u64) = avail;    // ullAvailPhys
+                    *((b.add(0x18)) as *mut u64) = total * 2;    // ullTotalPageFile
+                    *((b.add(0x20)) as *mut u64) = avail * 2;    // ullAvailPageFile
+                    *((b.add(0x28)) as *mut u64) = 0x7fff_0000_0000; // ullTotalVirtual
+                    *((b.add(0x30)) as *mut u64) = 0x7f00_0000_0000; // ullAvailVirtual
+                    *((b.add(0x38)) as *mut u64) = 0;        // ullAvailExtendedVirtual
+                }
+                c.gpr.rax = 1; true
+            }
             ("kernel32.dll", "GetSystemInfo") | ("kernel32.dll", "GetNativeSystemInfo") => {
                 // SYSTEM_INFO x64: wProcessorArchitecture@0 (u16), dwPageSize@4,
                 // lpMinimumApplicationAddress@8, lpMaximumApplicationAddress@0x10,
@@ -1240,6 +1286,22 @@ impl Default for ImportResolver {
 /// (SEGV at 0x80, build #155).
 fn okp(p: u64, len: u64) -> bool { crate::dispatch::plausible_mem(p, len) }
 
+/// (total, available) physical RAM in bytes, from /proc/meminfo.
+fn host_meminfo() -> (u64, u64) {
+    let (mut total, mut avail) = (0u64, 0u64);
+    if let Ok(s) = std::fs::read_to_string("/proc/meminfo") {
+        for line in s.lines() {
+            let kb = |l: &str| -> u64 {
+                l.split_whitespace().nth(1).and_then(|v| v.parse::<u64>().ok()).unwrap_or(0) * 1024
+            };
+            if line.starts_with("MemTotal:") { total = kb(line); }
+            else if line.starts_with("MemAvailable:") { avail = kb(line); }
+        }
+    }
+    if total == 0 { total = 4 << 30; avail = 2 << 30; }
+    (total, avail)
+}
+
 /// Free and total bytes of the filesystem backing `dir` (statvfs), so the
 /// engine's disk-space gate passes. Falls back to a large constant if the
 /// syscall fails (e.g. an unreadable path).
@@ -1467,6 +1529,7 @@ mod sys {
     pub const MAP_PRIVATE: i32 = 0x02;
     pub const MAP_ANONYMOUS: i32 = 0x20;
     pub const MAP_NORESERVE: i32 = 0x4000;
+    pub const MAP_FIXED: i32 = 0x10;
     pub const MAP_FAILED: isize = -1;
 }
 
@@ -1501,8 +1564,7 @@ static RESERVED_BAND: AtomicUsize = AtomicUsize::new(0);
 
 /// Blocks of at least this size are mmap'd (lazy zero pages) instead of
 /// committed through the allocator (D017).
-const MMAP_MIN: usize = 32 * 1024 * 1024;
-
+const MMAP_MIN: usize = 1024 * 1024;
 /// Total guest-heap budget. Past the ceiling allocations return NULL (the game
 /// sees an OOM and takes its own error path) instead of the kernel killing us.
 /// Override with `GOW_HEAP_MB` (default 3072).
@@ -1529,7 +1591,7 @@ fn reserve_budget() -> usize {
         std::env::var("GOW_RESERVE_MB")
             .ok()
             .and_then(|v| v.trim().parse::<usize>().ok())
-            .unwrap_or(32768) * 1024 * 1024
+            .unwrap_or(65536) * 1024 * 1024
     })
 }
 
@@ -1544,6 +1606,21 @@ pub fn heap_reserved() -> usize { RESERVED_BYTES.load(Ordering::Relaxed) }
 const PAGE: usize = 0x1000;
 
 fn heap_alloc_raw(size: usize, align: usize, page: bool) -> *mut u8 {
+    let trace = std::env::var_os("GOW_MEMTRACE").is_some();
+    if size >= (1024 * 1024) && trace {
+        crate::glog!("[gow.heap] alloc {} KiB align={align} page={page}", size / 1024);
+    }
+    if trace && size >= 0x100000 {
+        // nothing more; the return is logged at the end
+    }
+    // Diagnostic: dump every tracked block above 1 MiB that could hold the
+    // engine's free-list base, so a badstore right outside a block is traceable.
+    if trace && size >= (16 * 1024 * 1024) {
+        let t = alloc_table().lock().unwrap();
+        let list: Vec<String> = t.iter().filter(|(_, b)| b.size >= 1024 * 1024)
+            .map(|(a, b)| format!("0x{a:x}+0x{:x}", b.size)).collect();
+        crate::glog!("[gow.heap] blocks>=1MiB: {}", list.join(", "));
+    }
     let (size, align) = if page {
         ((((size.saturating_add(PAGE - 1)) / PAGE) * PAGE).max(PAGE), PAGE)
     } else {
@@ -1554,7 +1631,21 @@ fn heap_alloc_raw(size: usize, align: usize, page: bool) -> *mut u8 {
     // mmap is unavailable (non-unix) or the reservation cap refuses it.
     if size >= MMAP_MIN && align <= PAGE {
         let p = mmap_reserve(size);
-        if !p.is_null() { return p; }
+        if !p.is_null() {
+            if std::env::var_os("GOW_MEMTRACE").is_some() {
+                crate::glog!("[gow.heap] mmap {}-MiB -> {p:p}", size / (1024*1024));
+            }
+            return p;
+        }
+    }
+    if size >= (8 * 1024 * 1024) && std::env::var_os("GOW_MEMTRACE").is_some() {
+        crate::glog!("[gow.heap] large alloc {} KiB served committed (align={align})", size / 1024);
+    }
+    if size >= MMAP_MIN {
+        // A 32 MiB+ request that MAPPED_FIXED failed (mmap unavailable / cap) —
+        // log loudly: such a block is the engine's free-list arena, and the
+        // committed heap may not give it a single contiguous run.
+        crate::glog!("[gow.heap] WARNING: {}-MiB request served committed (mmap unavailable, align={align})", size / (1024*1024));
     }
     let live = LIVE_BYTES.fetch_add(size, Ordering::Relaxed) + size;
     if live > heap_budget() {
@@ -1579,6 +1670,9 @@ fn heap_alloc_raw(size: usize, align: usize, page: bool) -> *mut u8 {
     let p = unsafe { std::alloc::alloc_zeroed(layout) };
     if p.is_null() { return p; }
     alloc_table().lock().unwrap().insert(p as usize, Block { size, align, mmap: false });
+    if size >= (1024 * 1024) {
+        register_big_range(p as u64, p as u64 + size as u64);
+    }
     LIVE_BLOCKS.fetch_add(1, Ordering::Relaxed);
     PEAK_BYTES.fetch_max(live, Ordering::Relaxed);
     // Report heap growth in 128 MiB bands: a leak shows up in the log without a
@@ -1594,6 +1688,7 @@ fn heap_alloc_raw(size: usize, align: usize, page: bool) -> *mut u8 {
             RESERVED_BYTES.load(Ordering::Relaxed) / (1024 * 1024)
         );
     }
+    if size >= (1024*1024) && trace { crate::glog!("[gow.heap] alloc -> {p:p}"); }
     p
 }
 
@@ -1603,9 +1698,20 @@ fn heap_alloc_raw(size: usize, align: usize, page: bool) -> *mut u8 {
 /// (the caller then falls back to the committed heap, D018).
 #[cfg(unix)]
 fn mmap_reserve(size: usize) -> *mut u8 {
-    let rs = RESERVED_BYTES.fetch_add(size, Ordering::Relaxed) + size;
+    // Reserve with generous slack past the requested size (see comment) AND
+    // 64 KiB alignment: Windows VirtualAlloc always returns an address aligned
+    // to dwAllocationGranularity (64 KiB), and the engine's memory manager does
+    // `base + n*0x10000` chunk arithmetic that assumes it.
+    // A slack margin past the requested size. The engine's VRAM pool walks its
+    // free-list a few GiB past the block it was handed; any page there is backed
+    // lazily by `try_back_page`, so the reserve itself stays small and does not
+    // exhaust the address-space budget across many reserves.
+    const RESERVE_SLACK: usize = 64 * 1024 * 1024;
+    const GRANULARITY: usize = 0x10000;
+    let map_size = ((size + RESERVE_SLACK + GRANULARITY - 1) / GRANULARITY) * GRANULARITY;
+    let rs = RESERVED_BYTES.fetch_add(map_size, Ordering::Relaxed) + map_size;
     if rs > reserve_budget() {
-        RESERVED_BYTES.fetch_sub(size, Ordering::Relaxed);
+        RESERVED_BYTES.fetch_sub(map_size, Ordering::Relaxed);
         let n = REFUSED.fetch_add(1, Ordering::Relaxed);
         if n < 8 || n % 4096 == 0 {
             crate::glog!(
@@ -1617,20 +1723,35 @@ fn mmap_reserve(size: usize) -> *mut u8 {
         }
         return std::ptr::null_mut();
     }
-    let p = unsafe {
-        mmap(std::ptr::null_mut(), size, sys::PROT_READ | sys::PROT_WRITE,
+    // Over-map by GRANULARITY so we can align the base up to 64 KiB.
+    let raw = unsafe {
+        mmap(std::ptr::null_mut(), map_size + GRANULARITY, sys::PROT_READ | sys::PROT_WRITE,
              sys::MAP_PRIVATE | sys::MAP_ANONYMOUS | sys::MAP_NORESERVE, -1, 0)
     };
-    if p as isize == sys::MAP_FAILED {
-        RESERVED_BYTES.fetch_sub(size, Ordering::Relaxed);
+    if raw as isize == sys::MAP_FAILED {
+        RESERVED_BYTES.fetch_sub(map_size, Ordering::Relaxed);
         let n = REFUSED.fetch_add(1, Ordering::Relaxed);
         if n < 8 {
             crate::glog!("[gow.heap] mmap of {} MiB failed; allocation returns NULL", size / (1024 * 1024));
         }
         return std::ptr::null_mut();
     }
-    alloc_table().lock().unwrap().insert(p as usize, Block { size, align: PAGE, mmap: true });
+    // Align up to 64 KiB; unmap the unaligned head/tail so no VA is wasted.
+    let aligned = (raw as u64 + (GRANULARITY as u64 - 1)) & !(GRANULARITY as u64 - 1);
+    let head = aligned - raw as u64;
+    if head > 0 {
+        unsafe { munmap(raw, head as usize); }
+    }
+    let p = aligned as *mut u8;
+    alloc_table().lock().unwrap().insert(p as usize, Block { size: map_size, align: PAGE, mmap: true });
+    // Publish the WHOLE mapped range (including slack) so the validator accepts
+    // the pool's slightly-past-the-end accesses.
+    register_big_range(p as u64, p as u64 + map_size as u64);
     let band = rs / (128 * 1024 * 1024);
+    if std::env::var_os("GOW_MEMTRACE").is_some() {
+        crate::glog!("[gow.heap] mmap_reserve req={}MiB mapped={}MiB -> 0x{:x}..0x{:x}",
+            size / (1024*1024), map_size / (1024*1024), p as u64, p as u64 + map_size as u64);
+    }
     let last = RESERVED_BAND.fetch_max(band, Ordering::Relaxed);
     if band > 0 && band > last {
         crate::glog!("[gow.heap] reserved={}MiB (mmap, zero pages on touch)", rs / (1024 * 1024));
@@ -1677,6 +1798,127 @@ fn heap_block_containing(addr: u64) -> Option<(usize, usize)> {
     t.iter()
         .find(|(&base, b)| base <= a && a < base + b.size)
         .map(|(&base, b)| (base, b.size))
+}
+
+/// True if [addr, addr+len) fits inside a block the runtime allocated (arena,
+/// VirtualAlloc, TLS/heap block). Those are mapped by construction; the kernel's
+/// view (/proc/self/maps) on Android/MTE splits them with PROT_NONE guard granule
+/// pages, so it cannot be relied on for them.
+pub fn addr_in_tracked_block(addr: u64, len: u64) -> bool {
+    let a = addr & 0x00ff_ffff_ffff_ffff;
+    let b = a.wrapping_add(len.max(1));
+    // Lock-free fast path: the big reserved ranges (arena, 200 MiB blocks, …).
+    // These are added on mmap and never removed, so a validator running while
+    // another thread holds the alloc-table lock (or mid-malloc) still sees them.
+    if BIG_RANGES.iter().any(|(lo, hi)| {
+        a >= lo && b <= hi
+    }) {
+        return true;
+    }
+    let t = match alloc_table().try_lock() {
+        Ok(t) => t,
+        Err(_) => return false, // in use (e.g. mid-malloc); fall back to maps
+    };
+    let hit = t.iter().any(|(&base, blk)| {
+        let base = (base & 0x00ff_ffff_ffff_ffff) as u64;
+        let end = base.wrapping_add(blk.size as u64);
+        a >= base && b <= end
+    });
+    if !hit && std::env::var_os("GOW_MEMTRACE_MISS") .is_some() {
+        crate::glog!("[gow.memtrace] addr_in_tracked_block MISS addr=0x{addr:x} real=0x{a:x} blocks={}", t.len());
+    }
+    hit
+}
+
+/// Append-only list of large reserved ranges, published atomically so a
+/// validator never has to take the alloc-table lock. Fixed capacity (a handful
+/// of GiB-scale regions per run).
+static BIG_RANGES: BigRanges = BigRanges::new();
+
+struct BigRanges {
+    slots: [std::sync::atomic::AtomicU64; 64],
+}
+impl BigRanges {
+    const fn new() -> Self {
+        #[allow(clippy::declare_interior_mutable_const)]
+        const Z: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        BigRanges { slots: [Z; 64] }
+    }
+    fn push(&self, lo: u64, hi: u64) {
+        use std::sync::atomic::Ordering;
+        // Find the first free pair (lo,hi): lo initially 0.
+        for i in (0..self.slots.len() - 1).step_by(2) {
+            if self.slots[i].load(Ordering::Relaxed) == 0 {
+                if self.slots[i]
+                    .compare_exchange(0, lo, Ordering::Relaxed, Ordering::Relaxed)
+                    .is_ok()
+                {
+                    self.slots[i + 1].store(hi, Ordering::Relaxed);
+                    return;
+                }
+            }
+        }
+    }
+    fn iter(&self) -> impl Iterator<Item = (u64, u64)> + '_ {
+        use std::sync::atomic::Ordering;
+        (0..self.slots.len() - 1).step_by(2).filter_map(move |i| {
+            let lo = self.slots[i].load(Ordering::Relaxed);
+            if lo == 0 { None } else { Some((lo, self.slots[i + 1].load(Ordering::Relaxed))) }
+        })
+    }
+}
+
+/// Publish a large range so `addr_in_tracked_block` accepts it lock-free.
+pub fn register_big_range(lo: u64, hi: u64) {
+    BIG_RANGES.push(lo & 0x00ff_ffff_ffff_ffff, hi & 0x00ff_ffff_ffff_ffff);
+}
+
+/// Dump the registered big ranges (diagnostics: called from a failed store).
+pub fn log_big_ranges() {
+    let list: Vec<String> = BIG_RANGES.iter().map(|(lo, hi)| format!("0x{lo:x}-0x{hi:x}")).collect();
+    crate::glog!("[gow.badstore] big_ranges({}): {}", list.len(), list.join(", "));
+}
+
+/// Lazily map the 4 KiB page holding `addr` if it is plausibly part of a range we
+/// reserved (or a modest margin past one). Windows keeps a VirtualAlloc reserve
+/// accessible to commit; the engine's memory manager walks a free-list that can
+/// step a few MiB past the block it was handed. Backing the page here lets that
+/// write land instead of aborting the boot. Returns true if the page is now
+/// mapped and writable.
+pub fn try_back_page(addr: u64) -> bool {
+    const PAGE: u64 = 0x1000;
+    const MARGIN: u64 = 8 * 1024 * 1024 * 1024; // plausible VA around a range
+    let a = addr & 0x00ff_ffff_ffff_ffff;
+    let page = a & !(PAGE - 1);
+    // Never back a page inside the guest image (that is real game data/code).
+    let image = crate::crashlog::image_range();
+    if let Some((lo, hi)) = image {
+        if page >= lo && page < hi {
+            return false;
+        }
+    }
+    // Only back a page that sits inside or within a (large) margin of one of OUR
+    // reserved ranges — never an arbitrary wild pointer (that would grow without
+    // bound). The engine's pool walks both a little before and well past its block.
+    let near = BIG_RANGES.iter().any(|(lo, hi)| {
+        page >= lo.saturating_sub(MARGIN) && page < hi.saturating_add(MARGIN)
+    });
+    if !near {
+        return false;
+    }
+    #[cfg(unix)]
+    unsafe {
+        let r = mmap(page as *mut u8, PAGE as usize, sys::PROT_READ | sys::PROT_WRITE,
+                     sys::MAP_PRIVATE | sys::MAP_ANONYMOUS | sys::MAP_FIXED | sys::MAP_NORESERVE, -1, 0);
+        if std::env::var_os("GOW_MEMTRACE").is_some() {
+            let ranges: Vec<String> = BIG_RANGES.iter().map(|(lo,hi)| format!("0x{lo:x}-0x{hi:x}")).collect();
+            crate::glog!("[gow.back_page] page=0x{page:x} mmap={:p} ranges=[{}]", r, ranges.join(","));
+        }
+        if r as isize != sys::MAP_FAILED {
+            return true;
+        }
+    }
+    false
 }
 
 /// Public allocation helpers used by the CRT shims.

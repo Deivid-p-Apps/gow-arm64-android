@@ -42,6 +42,7 @@ struct GfxState {
     context_obj: u64,
     swapchain_obj: u64,
     factory_obj: u64,
+    adapter_obj: u64,
     frames: AtomicU64,
     first_present: AtomicU64,
 }
@@ -68,11 +69,13 @@ fn state() -> &'static Mutex<GfxState> {
         let context_obj = make_com_object(make_d3d11_context());
         let swapchain_obj = make_com_object(make_swapchain());
         let factory_obj = make_com_object(make_dxgi_factory());
+        let adapter_obj = make_com_object(make_dxgi_adapter());
         Mutex::new(GfxState {
             device_obj,
             context_obj,
             swapchain_obj,
             factory_obj,
+            adapter_obj,
             frames: AtomicU64::new(0),
             first_present: AtomicU64::new(0),
         })
@@ -143,19 +146,53 @@ fn is_known_iid(d0: u64, d1: u64) -> bool {
     const IUNKNOWN: (u64, u64) = (0x0000_0000_0000_0000, 0x4600_0000_0000_00c0);
     // The concrete IDs, encoded as the two qwords a COM `riid` occupies.
     const IDXGI_FACTORY1: (u64, u64) =
-        iid_of(0x770a_a070, 0x8f1f, 0x4c29, [0xb8, 0x6a, 0x86, 0x4a, 0x12, 0xb4, 0x44, 0x8c]);
+        iid_of(0x770a_ae78, 0xf26f, 0x4dba, [0xa8, 0x29, 0x25, 0x3c, 0x83, 0xd1, 0xb3, 0x87]);
     const ID3D11_DEVICE: (u64, u64) =
         iid_of(0xdb6f_6ddb, 0xac77, 0x4e88, [0x82, 0x53, 0x81, 0x9d, 0xf9, 0xbb, 0xf1, 0x40]);
     const ID3D11_DEVICE_CTX: (u64, u64) =
         iid_of(0xc0bf_a0d4, 0x1f28, 0x4742, [0x90, 0x81, 0x28, 0x08, 0x51, 0x6b, 0x6a, 0xb8]);
     const IDXGI_SWAPCHAIN: (u64, u64) =
         iid_of(0x310d_36f1, 0xdbe6, 0x4a75, [0x9c, 0x48, 0x7b, 0x56, 0x1a, 0xbb, 0x9e, 0xcc]);
+    // The higher DXGI factory / adapter revisions the engine queries by id
+    // (IDXGIFactory2..7, IDXGIAdapter1..3, IDXGIDevice..4). A COM object supports
+    // every interface on its inheritance chain, and our single vtable exposes the
+    // full DXGI1.x surface, so accept them all (the game then calls the same
+    // slots). Rejecting them made the engine fall back to a NULL object and fault.
+    const IDXGI_FACTORY2: (u64, u64) =
+        iid_of(0x50cd_c1b1, 0xcf52, 0x418b, [0xa8, 0xc4, 0x38, 0x78, 0x25, 0x1a, 0x8f, 0xcd]);
+    const IDXGI_FACTORY3: (u64, u64) =
+        iid_of(0x2548_38c6, 0x0e52, 0x4d93, [0x83, 0xfe, 0xc6, 0x82, 0x3f, 0x5f, 0x6b, 0x40]);
+    const IDXGI_FACTORY4: (u64, u64) =
+        iid_of(0x1bc6_ea02, 0xef36, 0x464f, [0xbf, 0x0c, 0x21, 0xca, 0x39, 0xe5, 0x16, 0x8a]);
+    const IDXGI_FACTORY5: (u64, u64) =
+        iid_of(0x7632_e1f5, 0xee65, 0x4dca, [0x87, 0xfd, 0x84, 0xcd, 0x75, 0xf8, 0x83, 0x8d]);
+    const IDXGI_FACTORY6: (u64, u64) =
+        iid_of(0xc1b6_694f, 0xff09, 0x44a9, [0xb0, 0x3c, 0x77, 0x90, 0x0a, 0x0a, 0x1d, 0x17]);
+    const IDXGI_FACTORY7: (u64, u64) =
+        iid_of(0xa496_6d96, 0x0898, 0x4c92, [0x80, 0x4e, 0x7f, 0x52, 0x9f, 0x1a, 0x8b, 0x23]);
+    const IDXGI_ADAPTER1: (u64, u64) =
+        iid_of(0x2903_8f61, 0x3839, 0x4626, [0x91, 0xfd, 0x08, 0x68, 0x79, 0x01, 0x1a, 0x05]);
+    const IDXGI_ADAPTER2: (u64, u64) =
+        iid_of(0x0c73_b82b, 0xd1ac, 0x4c22, [0xb7, 0x96, 0x74, 0xb1, 0xa5, 0x8e, 0x20, 0x3e]);
+    const IDXGI_ADAPTER3: (u64, u64) =
+        iid_of(0x6459_6719, 0x11c0, 0x4c00, [0xb5, 0xd8, 0x13, 0xad, 0xb8, 0xbc, 0x3a, 0x8f]);
+    const IDXGI_DEVICE: (u64, u64) =
+        iid_of(0x54ec_77b8, 0xef17, 0x4a70, [0xbf, 0x9f, 0x9b, 0x1a, 0x9c, 0x0e, 0x38, 0x05]);
     let passed = (d0, d1);
+    // Match what the engine tolerates: accept the base factory/device/swapchain
+    // and the adapter chain, but NOT the high IDXGIFactory2..7 revisions. The
+    // engine's GPU/VRAM probe takes a different (broken on this heap) path when
+    // it gets a Factory6 — DXVK answers E_NOINTERFACE for it and the engine
+    // falls back to the IDXGIFactory1 path, which works.
     passed == IUNKNOWN
         || passed == IDXGI_FACTORY1
         || passed == ID3D11_DEVICE
         || passed == ID3D11_DEVICE_CTX
         || passed == IDXGI_SWAPCHAIN
+        || passed == IDXGI_ADAPTER1
+        || passed == IDXGI_ADAPTER2
+        || passed == IDXGI_ADAPTER3
+        || passed == IDXGI_DEVICE
 }
 
 /// Encode a GUID as the two little-endian qwords a COM caller passes in `riid`.
@@ -205,8 +242,18 @@ pub fn make_dxgi_factory() -> u64 {
     // 0 QueryInterface,1 AddRef,2 Release, 3 SetPrivateData,4 SetPrivateDataInterface,
     // 5 GetPrivateData,6 GetParent, 7 EnumAdapters,8 MakeWindowAssociation,
     // 9 GetWindowAssociation,10 CreateSwapChain,11 CreateSoftwareAdapter,
-    // 12 EnumAdapters1,13 IsCurrent.
-    const VT_LEN: usize = 14;
+    // 12 EnumAdapters1,13 IsCurrent, 14 IsWindowedStereoEnabled,
+    // 15 CreateSwapChainForHwnd, 16 CreateSwapChainForCoreWindow,
+    // 17 GetSharedResourceAdapterLuid, 18 RegisterStereoStatusWindow,
+    // 19 RegisterStereoStatusEvent, 20 UnregisterStereoStatus,
+    // 21 RegisterOcclusionStatusWindow, 22 RegisterOcclusionStatusEvent,
+    // 23 UnregisterOcclusionStatus, 24 CreateSwapChainForComposition,
+    // 25 EnumAdapterByLuid, 26 EnumAdapterByGpuPreference, 27 (Factory7) ...
+    // Grown to 32 so a factory6/7 call never runs past the array into host
+    // memory. The engine calls slot 0x29 (EnumAdapterByGpuPreference) during its
+    // GPU probe; a short vtable made that a MISSCALL storm (build log
+    // calls_missed>1e6).
+    const VT_LEN: usize = 32;
     let query = make_query_interface();
     let addref = hostcall::register(|cpu| unsafe { (*cpu).gpr.rax = 1; });
     let release = hostcall::register(|cpu| unsafe { (*cpu).gpr.rax = 0; });
@@ -214,6 +261,56 @@ pub fn make_dxgi_factory() -> u64 {
         (*cpu).gpr.rax = DXGI_ERROR_NOT_FOUND;
     });
     let make_window_assoc = hostcall::register(|cpu| unsafe { (*cpu).gpr.rax = S_OK; });
+    // EnumAdapters1(this, index, ppAdapter): return the single native adapter
+    // object for index 0, DXGI_ERROR_NOT_FOUND beyond it. The engine's GPU probe
+    // (f_40a610) enumerates adapters and reads their DESC/video memory; a
+    // NOT_FOUND for index 0 left it with a NULL adapter and it faulted.
+    let enum_adapters1 = hostcall::register(|cpu| unsafe {
+        let c = &mut *cpu;
+        let index = arg(c, 1);
+        let out = arg(c, 2);
+        if index == 0 {
+            let ad = state().lock().unwrap().adapter_obj;
+            store_out(out, ad);
+            crate::glog!("[gow.vk.native.d3d11] IDXGIFactory::EnumAdapters1(0) -> 0x{ad:x}");
+            c.gpr.rax = S_OK;
+        } else {
+            store_out(out, 0);
+            c.gpr.rax = DXGI_ERROR_NOT_FOUND;
+        }
+    });
+    // CheckFeatureSupport: answer a zeroed struct + S_OK (the engine probes
+    // optional caps here; a NOT_FOUND or garbage read made its VRAM math wrong).
+    let check_feature = hostcall::register(|cpu| unsafe {
+        let c = &mut *cpu;
+        let out = arg(c, 3);
+        let size = arg(c, 1);
+        if out != 0 {
+            std::ptr::write_bytes(out as *mut u8, 0, (size as usize).min(0x100));
+        }
+        c.gpr.rax = S_OK;
+    });
+    // Slot 29 is the factory6/7 adapter-enumeration entry the engine's GPU probe
+    // calls with an increasing index (rdx) and stops on DXGI_ERROR_NOT_FOUND.
+    // Serve adapter 0, then NOT_FOUND.
+    let enum_by_index = hostcall::register(|cpu| unsafe {
+        let c = &mut *cpu;
+        let index = arg(c, 1);
+        let a4 = arg(c, 4);
+        let a3 = arg(c, 3);
+        crate::glog!("[gow.vk.native.d3d11] enum_by_index index={index} r9=0x{a3:x} stack5=0x{a4:x}");
+        // ppAdapter is arg 5 (R9 carries a riid); args 5+ live on the shadow
+        // stack at [rsp+0x28].
+        let out = a4;
+        if index == 0 {
+            let ad = state().lock().unwrap().adapter_obj;
+            store_out(out, ad);
+            c.gpr.rax = S_OK;
+        } else {
+            store_out(out, 0);
+            c.gpr.rax = DXGI_ERROR_NOT_FOUND;
+        }
+    });
     let create_swapchain = hostcall::register(|cpu| unsafe {
         let c = &mut *cpu;
         // CreateSwapChain(this, pDevice, pDesc, ppSwapChain): out is arg 3.
@@ -232,9 +329,81 @@ pub fn make_dxgi_factory() -> u64 {
             (2, release),
             (7, not_found),
             (8, make_window_assoc),
-            (12, not_found),
+            (12, enum_adapters1),
             (10, create_swapchain),
+            (25, enum_by_index),
+            (26, check_feature),
+            (29, enum_by_index),
+            (30, enum_by_index),
         ],
+        VT_LEN,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// IDXGIAdapter1
+// ---------------------------------------------------------------------------
+
+/// Build the `IDXGIAdapter` vtable. The engine's GPU probe gets this from
+/// `EnumAdapters1` and calls `GetDesc`/`CheckInterfaceSupport` plus
+/// `EnumOutputs`; we answer with the real Turnip identity so its video-memory
+/// math is sane.
+fn make_dxgi_adapter() -> u64 {
+    // 0 QueryInterface,1 AddRef,2 Release,3 SetPrivateData,4 SetPrivateDataInterface,
+    // 5 GetPrivateData,6 GetParent,7 EnumOutputs,8 GetDesc,9 CheckInterfaceSupport.
+    // Grown to 16: the engine also probes later adapter slots (10+ / IAdapter3
+    // GetDesc1/GetDesc3) during its GPU scan; a short vtable read host memory.
+    const VT_LEN: usize = 16;
+    let query = make_query_interface();
+    let addref = hostcall::register(|cpu| unsafe { (*cpu).gpr.rax = 1; });
+    let release = hostcall::register(|cpu| unsafe { (*cpu).gpr.rax = 0; });
+    let enum_outputs = hostcall::register(|cpu| unsafe {
+        let c = &mut *cpu;
+        if arg(c, 1) == 0 { c.gpr.rax = S_OK; } else { c.gpr.rax = DXGI_ERROR_NOT_FOUND; }
+    });
+    let get_desc = hostcall::register(|cpu| unsafe {
+        let c = &mut *cpu;
+        let out = arg(c, 1);
+        crate::glog!("[gow.vk.native.d3d11] IDXGIAdapter::GetDesc out=0x{out:x}");
+        // DXGI_ADAPTER_DESC1 (0x200 bytes): Description[128] UTF-16 @0,
+        // VendorId@0x100, DeviceId@0x104, SubSysId@0x108, Revision@0x10c,
+        // DedicatedVideoMemory@0x110, DedicatedSystemMemory@0x118,
+        // SharedSystemMemory@0x120, AdapterLuid@0x128, Flags@0x130.
+        if out != 0 {
+            let b = out as *mut u8;
+            std::ptr::write_bytes(b, 0, 0x200);
+            let name: Vec<u16> = "Turnip Adreno (TM) 660".encode_utf16().collect();
+            for (i, w) in name.iter().enumerate().take(127) {
+                *((b.add(i * 2)) as *mut u16) = *w;
+            }
+            *((b.add(0x100)) as *mut u32) = 0x5143;            // VendorId (Qualcomm)
+            *((b.add(0x104)) as *mut u32) = 0x0605_0002;       // DeviceId (Adreno 660)
+            // Small, truthful device-local size. The engine derives its VRAM
+            // pool from this then builds a free-list over the pooled block; an
+            // over-large value made the list span past what a single allocation
+            // can back (f_40a610 free-list badstore). 256 MiB keeps it bounded.
+            *((b.add(0x110)) as *mut u64) = 256u64 << 20;      // DedicatedVideoMemory
+            *((b.add(0x118)) as *mut u64) = 0;                 // DedicatedSystemMemory
+            *((b.add(0x120)) as *mut u64) = 512u64 << 20;      // SharedSystemMemory
+        }
+        c.gpr.rax = S_OK;
+    });
+    let check_support = hostcall::register(|cpu| unsafe { (*cpu).gpr.rax = S_OK; });
+    // Later adapter slots (IDXGIAdapter2/3 GetDesc1/GetDesc3, QueryVideoMemoryInfo):
+    // the engine's GPU scan touches them. Zero the out buffer and answer S_OK so
+    // it never reads uninitialized fields, but never a null vtable slot.
+    let adapter_extra = hostcall::register(|cpu| unsafe {
+        let c = &mut *cpu;
+        let out = arg(c, 1);
+        if out != 0 {
+            std::ptr::write_bytes(out as *mut u8, 0, 0x100);
+        }
+        c.gpr.rax = S_OK;
+    });
+    hostcall::build_vtable(
+        &[(0, query), (1, addref), (2, release), (7, enum_outputs), (8, get_desc),
+          (9, check_support), (10, adapter_extra), (11, adapter_extra),
+          (12, adapter_extra), (13, adapter_extra), (14, adapter_extra), (15, adapter_extra)],
         VT_LEN,
     )
 }

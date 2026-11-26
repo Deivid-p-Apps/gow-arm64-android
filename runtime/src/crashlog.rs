@@ -11,6 +11,18 @@ pub fn set_current_cpu(cpu: *mut GowCpu) {
     unsafe { CURRENT_CPU = cpu; }
 }
 
+/// The guest image [base, base+size) of the running CPU, if set. Used by the
+/// heap to refuse backing a page that would shadow real game code/data.
+pub fn image_range() -> Option<(u64, u64)> {
+    unsafe {
+        if CURRENT_CPU.is_null() {
+            return None;
+        }
+        let c = &*CURRENT_CPU;
+        Some((c.image_base, c.image_base + c.image_size))
+    }
+}
+
 #[repr(C)]
 struct SigAction {
     sa_sigaction: usize,
@@ -29,31 +41,38 @@ const SIGSEGV: i32 = 11;
 const SIGBUS: i32 = 7;
 const SIGABRT: i32 = 6;
 
-extern "C" fn handler(sig: i32, _info: *mut std::ffi::c_void, ucontext: *mut std::ffi::c_void) {
+extern "C" fn handler(sig: i32, info: *mut std::ffi::c_void, ucontext: *mut std::ffi::c_void) {
     unsafe {
         let cpu = CURRENT_CPU;
-        // On aarch64 Linux/Android, ucontext->uc_mcontext.pc is at a known offset.
-        // mcontext starts at offset 0x28 in ucontext_t; pc is the first field of
-        // the aarch64 sigcontext (fault_address was at +0x0 of the private area,
-        // but uc_mcontext.pc is the value we want).
         let pc = read_pc(ucontext);
-        let rva = if !cpu.is_null() {
-            // CPU rip holds the current guest function VA.
-            ((*cpu).rip).wrapping_sub((*cpu).image_base)
+        // siginfo_t: si_signo(0), si_errno(4), si_code(8), then for a fault the
+        // address is at offset 16 on aarch64 Linux/Android.
+        let fault = if !info.is_null() {
+            *((info as *const u8).add(16) as *const u64)
+        } else { 0 };
+        let (rva, msg) = if !cpu.is_null() {
+            let rva = ((*cpu).rip).wrapping_sub((*cpu).image_base);
+            (rva,
+             format!("[gow.SIGSEGV] signal={sig} fault=0x{fault:x} pc=0x{pc:x} guest_rva=0x{rva:x} rsp=0x{:x} rbp=0x{:x} rdi=0x{:x} rsi=0x{:x} rcx=0x{:x} rax=0x{:x} r8=0x{:x}\n",
+                (*cpu).gpr.rsp, (*cpu).gpr.rbp, (*cpu).gpr.rdi, (*cpu).gpr.rsi,
+                (*cpu).gpr.rcx, (*cpu).gpr.rax, (*cpu).gpr.r8))
         } else {
-            0
+            (0, format!("[gow.SIGSEGV] signal={sig} fault=0x{fault:x} pc=0x{pc:x}\n"))
         };
-        let addr = if !cpu.is_null() {
-            format!("guest_rip_rva=0x{rva:x} rsp=0x{:x} rbp=0x{:x} rdi=0x{:x} rsi=0x{:x} rbx=0x{:x}",
-                (*cpu).gpr.rsp, (*cpu).gpr.rbp, (*cpu).gpr.rdi, (*cpu).gpr.rsi, (*cpu).gpr.rbx)
-        } else {
-            String::new()
-        };
-        crate::glog!("[gow.SIGSEGV] signal={sig} pc=0x{pc:x} {addr}");
-        // Re-raise with default handler so the tombstone is still produced.
+        let _ = rva;
+        // Write with a raw syscall: the normal logger takes locks and allocates,
+        // which is unsafe inside a signal handler.
+        raw_write(2, msg.as_bytes());
+        // Re-raise with the default handler so the tombstone is still produced.
         let mut act = SigAction { sa_sigaction: 0, sa_mask: [0; 16], sa_flags: 0, sa_restorer: 0 };
         sigaction(sig, &act, std::ptr::null_mut());
     }
+}
+
+/// Async-signal-safe write(2) via the raw syscall.
+unsafe fn raw_write(fd: i32, buf: &[u8]) {
+    extern "C" { fn write(fd: i32, buf: *const u8, n: usize) -> isize; }
+    let _ = write(fd, buf.as_ptr(), buf.len());
 }
 
 unsafe fn read_pc(ucontext: *mut std::ffi::c_void) -> u64 {
