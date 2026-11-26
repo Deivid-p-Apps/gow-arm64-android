@@ -14,6 +14,11 @@ RUNTIME_LIB="${RUNTIME_LIB:-$ROOT/target/release}"
 mkdir -p "$GEN" "$OBJ"
 
 echo "[1/3] lifting $EXE"
+# The lifter numbers shards by emitted byte size, so a code-change can produce
+# FEWER shards than the previous run. Remove the old ones first: a stale
+# `gow_shard_NNN.c` would otherwise be linked alongside the new set and define
+# the same `f_<rva>` symbols twice (duplicate-symbol link failure).
+rm -f "$GEN"/gow_shard_*.c "$GEN"/gow_table.c "$GEN"/gow_protos.h
 "$ROOT/target/release/gowrecomp" "$EXE" "$GEN"
 
 echo "[2/3] compiling shards -> $OBJ"

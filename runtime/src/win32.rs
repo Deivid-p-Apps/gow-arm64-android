@@ -302,34 +302,29 @@ impl ImportResolver {
             }
             ("kernel32.dll", "TlsAlloc") => { c.gpr.rax = tls_alloc(); true }
             ("kernel32.dll", "TlsGetValue") => {
-                // Read the per-thread TLS slot from the TEB: [gs:0x58][index].
+                // Read the per-thread slot from the SAME array the guest's raw
+                // `mov rax,[gs:0x58]; ... [rax+idx*8]` access uses: the
+                // ThreadLocalStoragePointer (a.k.a. the expansion slots). The old
+                // code kept indices <64 in a separate inline area at TEB+0x148,
+                // so a value written by TlsSetValue/FlsSetValue was invisible to
+                // the engine's own compiled TLS reads (it read the expansion
+                // array) — the job system stored its current fiber via FLS and
+                // then read back 0, calling SwitchToFiber(0) (D039).
                 let idx = a0;
                 let teb = c.teb;
-                if teb != 0 && idx < 128 {
-                    let tls_ptr = *((teb + 0x58) as *const u64);
-                    let slot = if idx < 64 {
-                        *((teb + 0x148 + idx * 8) as *const u64)
-                    } else if tls_ptr != 0 {
-                        *((tls_ptr + idx * 8) as *const u64)
-                    } else { 0 };
-                    c.gpr.rax = slot;
-                } else {
-                    c.gpr.rax = 0;
-                }
+                let tls_ptr = if teb != 0 { *((teb + 0x58) as *const u64) } else { 0 };
+                c.gpr.rax = if tls_ptr != 0 && idx < 4096 {
+                    *((tls_ptr + idx * 8) as *const u64)
+                } else { 0 };
                 true
             }
             ("kernel32.dll", "TlsSetValue") => {
-                // Write [gs:0x58][index] (inline slots for the first 64 indices).
                 let idx = a0;
                 let val = a1;
                 let teb = c.teb;
-                if teb != 0 && idx < 128 {
-                    let tls_ptr = *((teb + 0x58) as *const u64);
-                    if idx < 64 {
-                        *((teb + 0x148 + idx * 8) as *mut u64) = val;
-                    } else if tls_ptr != 0 {
-                        *((tls_ptr + idx * 8) as *mut u64) = val;
-                    }
+                let tls_ptr = if teb != 0 { *((teb + 0x58) as *const u64) } else { 0 };
+                if tls_ptr != 0 && idx < 4096 {
+                    *((tls_ptr + idx * 8) as *mut u64) = val;
                 }
                 c.gpr.rax = 1;
                 true
@@ -339,12 +334,14 @@ impl ImportResolver {
             ("kernel32.dll", "FlsGetValue") => {
                 let idx = a0;
                 let teb = c.teb;
-                c.gpr.rax = if teb != 0 && idx < 64 { *((teb + 0x148 + idx * 8) as *const u64) } else { 0 };
+                let tls_ptr = if teb != 0 { *((teb + 0x58) as *const u64) } else { 0 };
+                c.gpr.rax = if tls_ptr != 0 && idx < 4096 { *((tls_ptr + idx * 8) as *const u64) } else { 0 };
                 true
             }
             ("kernel32.dll", "FlsSetValue") => {
                 let idx = a0; let val = a1;
-                if c.teb != 0 && idx < 64 { *((c.teb + 0x148 + idx * 8) as *mut u64) = val; }
+                let tls_ptr = if c.teb != 0 { *((c.teb + 0x58) as *const u64) } else { 0 };
+                if tls_ptr != 0 && idx < 4096 { *((tls_ptr + idx * 8) as *mut u64) = val; }
                 c.gpr.rax = 1; true
             }
             ("kernel32.dll", "FlsFree") => { c.gpr.rax = 1; true }
@@ -512,7 +509,126 @@ impl ImportResolver {
                 c.gpr.rax = 1; // IDOK
                 true
             }
-            ("user32.dll", "ShowWindow") | ("user32.dll", "DestroyWindow") => { c.gpr.rax = 1; true }
+            ("user32.dll", "RegisterClassExA") | ("user32.dll", "RegisterClassExW") => {
+                c.gpr.rax = 1; true
+            }
+            ("user32.dll", "CreateWindowExA") | ("user32.dll", "CreateWindowExW") => {
+                // (exStyle, class, title, style, x, y, w, h, parent, menu, inst, param)
+                let wide = func.ends_with('W');
+                let title = read_cstr(a2, wide);
+                let w = arg(2) as i32;
+                let h = arg(3) as i32;
+                let hwnd = crate::sdl2win::create_window(&title, w, h);
+                crate::glog!("[gow.window] CreateWindowEx title={title:?} size={w}x{h} -> hwnd=0x{hwnd:x}");
+                // 0 means SDL2 is unavailable (device/APK path): hand out an
+                // opaque non-null handle so the engine still has a window object.
+                c.gpr.rax = if hwnd != 0 { hwnd } else { 0x20001 };
+                true
+            }
+            ("user32.dll", "ShowWindow") => {
+                crate::sdl2win::show(a0, a1 != 0); // SW_HIDE == 0
+                c.gpr.rax = 1; true
+            }
+            ("user32.dll", "DestroyWindow") => {
+                crate::sdl2win::destroy(a0);
+                c.gpr.rax = 1; true
+            }
+            ("user32.dll", "GetClientRect") | ("user32.dll", "GetWindowRect") => {
+                let (w, h) = crate::sdl2win::window_size(a0).unwrap_or((1280, 720));
+                if okp(a1, 16) {
+                    *(a1 as *mut i32) = 0;
+                    *((a1 + 4) as *mut i32) = 0;
+                    *((a1 + 8) as *mut i32) = w;
+                    *((a1 + 12) as *mut i32) = h;
+                }
+                c.gpr.rax = 1; true
+            }
+            ("user32.dll", "AdjustWindowRect") | ("user32.dll", "AdjustWindowRectEx") => { c.gpr.rax = 1; true }
+            ("user32.dll", "ClientToScreen") | ("user32.dll", "ScreenToClient") => { c.gpr.rax = 1; true }
+            ("user32.dll", "SetWindowPos") => {
+                let (w, h) = (a4 as i32, a5 as i32);
+                if w > 0 && h > 0 { crate::sdl2win::resize(a0, w, h); }
+                c.gpr.rax = 1; true
+            }
+            ("user32.dll", "MoveWindow") => {
+                let (w, h) = (a3 as i32, a4 as i32);
+                if w > 0 && h > 0 { crate::sdl2win::resize(a0, w, h); }
+                c.gpr.rax = 1; true
+            }
+            ("user32.dll", "PeekMessageA") | ("user32.dll", "PeekMessageW") => {
+                crate::sdl2win::pump();
+                c.gpr.rax = 0; true // no synthesised Win32 messages yet
+            }
+            ("user32.dll", "DispatchMessageA") | ("user32.dll", "DispatchMessageW")
+            | ("user32.dll", "DefWindowProcA") | ("user32.dll", "DefWindowProcW")
+            | ("user32.dll", "CallWindowProcW")
+            | ("user32.dll", "SendMessageA") | ("user32.dll", "SendMessageW") => {
+                c.gpr.rax = 0; true
+            }
+            ("user32.dll", "TranslateMessage") => { c.gpr.rax = 1; true }
+            ("user32.dll", "IsWindow") => { c.gpr.rax = if a0 != 0 { 1 } else { 0 }; true }
+            ("user32.dll", "GetWindowLongA") | ("user32.dll", "GetWindowLongPtrW") => { c.gpr.rax = 0; true }
+            ("user32.dll", "SetWindowLongA") | ("user32.dll", "SetWindowLongPtrW") => { c.gpr.rax = 0; true }
+            ("user32.dll", "GetWindowThreadProcessId") => {
+                if okp(a1, 4) { *(a1 as *mut u32) = std::process::id(); }
+                c.gpr.rax = 1; true
+            }
+            ("user32.dll", "MonitorFromWindow") => { c.gpr.rax = 0x10001; true }
+            ("user32.dll", "GetMonitorInfoA") | ("user32.dll", "GetMonitorInfoW") => {
+                if okp(a1, 40) {
+                    *(a1 as *mut u32) = 40;                 // cbSize
+                    for off in [4u64, 20u64] {              // rcMonitor, rcWork
+                        *((a1 + off) as *mut i32) = 0;
+                        *((a1 + off + 4) as *mut i32) = 0;
+                        *((a1 + off + 8) as *mut i32) = 1280;
+                        *((a1 + off + 12) as *mut i32) = 720;
+                    }
+                    *((a1 + 36) as *mut u32) = 1;           // MONITORINFOF_PRIMARY
+                }
+                c.gpr.rax = 1; true
+            }
+            ("user32.dll", "EnumDisplayMonitors") => { c.gpr.rax = 0; true }
+            ("user32.dll", "EnumDisplayDevicesA") | ("user32.dll", "EnumDisplayDevicesW") => { c.gpr.rax = 0; true }
+            ("user32.dll", "EnumDisplaySettingsA") | ("user32.dll", "EnumDisplaySettingsW") => {
+                if okp(a2, 220) {                           // DEVMODEA/W
+                    std::ptr::write_bytes(a2 as *mut u8, 0, 220);
+                    *((a2 + 72) as *mut u32) = 1280;        // dmPelsWidth
+                    *((a2 + 76) as *mut u32) = 720;         // dmPelsHeight
+                    *((a2 + 80) as *mut u32) = 32;          // dmBitsPerPel
+                    *((a2 + 84) as *mut u32) = 60;          // dmDisplayFrequency
+                }
+                c.gpr.rax = 1; true
+            }
+            ("user32.dll", "GetWindowPlacement") | ("user32.dll", "SetWindowPlacement") => { c.gpr.rax = 1; true }
+            ("user32.dll", "BeginPaint") => { c.gpr.rax = 0; true }
+            ("user32.dll", "EndPaint") => { c.gpr.rax = 1; true }
+            ("user32.dll", "InvalidateRect") => { c.gpr.rax = 1; true }
+            ("user32.dll", "GetParent") | ("user32.dll", "GetAncestor") => { c.gpr.rax = 0; true }
+            ("user32.dll", "SetCapture") => { c.gpr.rax = 0x10001; true }
+            ("user32.dll", "ReleaseCapture") => { c.gpr.rax = 1; true }
+            ("user32.dll", "GetCapture") => { c.gpr.rax = 0; true }
+            ("user32.dll", "TrackMouseEvent") => { c.gpr.rax = 1; true }
+            ("user32.dll", "RegisterRawInputDevices") => { c.gpr.rax = 1; true }
+            ("user32.dll", "GetRawInputData") => { c.gpr.rax = 0; true }
+            ("user32.dll", "RegisterHotKey") | ("user32.dll", "UnregisterHotKey") => { c.gpr.rax = 1; true }
+            ("user32.dll", "RegisterDeviceNotificationW") => { c.gpr.rax = 0; true }
+            ("user32.dll", "UnregisterDeviceNotification") => { c.gpr.rax = 1; true }
+            ("user32.dll", "SetProcessDpiAwarenessContext") | ("user32.dll", "SetThreadDpiAwarenessContext") => { c.gpr.rax = 1; true }
+            ("user32.dll", "GetCursorInfo") => { c.gpr.rax = 0; true }
+            ("user32.dll", "PtInRect") => {
+                let (l, t, r, b) = if okp(a0, 16) {
+                    (*((a0) as *const i32), *((a0 + 4) as *const i32), *((a0 + 8) as *const i32), *((a0 + 12) as *const i32))
+                } else { (0, 0, 0, 0) };
+                let x = a1 as u32 as i32;
+                let y = (a1 >> 32) as u32 as i32;
+                c.gpr.rax = if x >= l && x < r && y >= t && y < b { 1 } else { 0 };
+                true
+            }
+            ("user32.dll", "VkKeyScanA") => { c.gpr.rax = 0; true }
+            ("user32.dll", "MapVirtualKeyA") | ("user32.dll", "MapVirtualKeyExA") => { c.gpr.rax = 0; true }
+            ("user32.dll", "LoadCursorA") | ("user32.dll", "LoadCursorW")
+            | ("user32.dll", "LoadIconA") | ("user32.dll", "LoadIconW") => { c.gpr.rax = 1; true }
+            ("user32.dll", "PostQuitMessage") => { c.gpr.rax = 0; true }
             ("user32.dll", "GetDesktopWindow") | ("user32.dll", "GetForegroundWindow") => { c.gpr.rax = 0x10001; true }
             ("kernel32.dll", "GetConsoleWindow") => { c.gpr.rax = 0; true }
             ("kernel32.dll", "FreeConsole") | ("kernel32.dll", "AttachConsole") => { c.gpr.rax = 1; true }
@@ -809,22 +925,24 @@ impl ImportResolver {
             ("kernel32.dll", "ReleaseMutex") => { self.sync.release_mutex(a0); c.gpr.rax = 1; true }
             ("kernel32.dll", "CreateThread") => {
                 // CreateThread(attr, stack_size, start_address, parameter, flags, out):
-                // start = R8, parameter = R9. The old code swapped them and read
-                // the parameter from the wrong stack slot.
+                // start = R8, parameter = R9, flags = 5th arg. CREATE_SUSPENDED
+                // (0x4) means the engine wants to finish wiring the thread's
+                // struct before it runs, so honour it.
                 let start = a2;
                 let param = a3;
-                let h = self.threads.spawn(cpu, start, param);
+                let flags = if okp(arg(0), 4) { *(arg(0) as *const u32) as u64 } else { 0 };
+                let suspended = flags & 0x4 != 0;
+                let h = self.threads.spawn_ex(cpu, start, param, suspended);
                 c.gpr.rax = h;
                 true
             }
             ("kernel32.dll", "ResumeThread") => {
-                // Threads spawn running, so the previous suspend count is 0.
-                // The old unimplemented answer left RAX at garbage and the
-                // engine's job manager read it as an error (D019, build #157).
-                c.gpr.rax = 0;
+                // Releases a CREATE_SUSPENDED thread's start gate. Returns the
+                // previous suspend count (1 if it was suspended).
+                c.gpr.rax = self.threads.resume(a0);
                 true
             }
-            ("kernel32.dll", "SuspendThread") => { c.gpr.rax = 0; true }
+            ("kernel32.dll", "SuspendThread") => { c.gpr.rax = self.threads.suspend(a0); true }
             ("kernel32.dll", "TerminateThread") => { c.gpr.rax = 1; true }
             ("kernel32.dll", "TerminateProcess") => {
                 // The engine calls this during init (device log, build #157) —
@@ -856,41 +974,46 @@ impl ImportResolver {
                 // (dwStackSize, lpStartAddress, lpParameter)
                 let start = a1;
                 let param = a2;
-                c.gpr.rax = make_fiber(cpu, start, param);
-                true
-            }
-            ("kernel32.dll", "CreateFiberEx") => {
-                // (dwStackReserveSize, dwStackCommitSize, dwFlags, lpStartAddress, lpParameter)
-                let start = a3;
-                let param = a4;
-                c.gpr.rax = make_fiber(cpu, start, param);
-                true
-            }
-            ("kernel32.dll", "DeleteFiber") => {
-                // The thunk stays registered (hostcall thunks are process-global);
-                // forgetting the fiber is enough.
-                c.gpr.rax = 1;
-                true
-            }
-            ("kernel32.dll", "SwitchToFiber") => {
-                if crate::hostcall::is_thunk(a0) {
-                    crate::hostcall::call(a0, cpu);
-                    c.gpr.rax = 1;
-                } else {
+                if start < c.image_base || start >= c.image_base + c.image_size {
                     let n = MISSING.fetch_add(1, Ordering::Relaxed);
-                    if n < 32 { crate::glog!("[gow.fiber] SwitchToFiber(0x{a0:x}) of a non-thunk handle ignored"); }
+                    if n < 16 { crate::glog!("[gow.fiber] CreateFiber start 0x{start:x} outside the image -> NULL"); }
                     c.gpr.rax = 0;
+                } else {
+                    let rva = (start - c.image_base) as u32;
+                    c.gpr.rax = crate::fibers::create(cpu, rva as u64, param);
                 }
                 true
             }
+            ("kernel32.dll", "CreateFiberEx") => {
+                // (reserve, commit, flags, lpStartAddress, lpParameter)
+                let start = a3;
+                let param = a4;
+                let rva = if start >= c.image_base && start < c.image_base + c.image_size {
+                    (start - c.image_base) as u32
+                } else { 0 };
+                c.gpr.rax = if rva != 0 { crate::fibers::create(cpu, rva as u64, param) } else { 0 };
+                true
+            }
+            ("kernel32.dll", "DeleteFiber") => { c.gpr.rax = 1; true }
+            ("kernel32.dll", "SwitchToFiber") => {
+                // A real cooperative handoff (D040): the calling host thread
+                // blocks until the target fiber grants it the baton back. This is
+                // the job scheduler's yield/resume path.
+                crate::fibers::switch(a0);
+                c.gpr.rax = 1;
+                true
+            }
             ("kernel32.dll", "ConvertThreadToFiber") | ("kernel32.dll", "ConvertThreadToFiberEx") => {
-                // A fiber handle representing "this thread": switching to it is
-                // a no-op that just continues execution.
-                let thunk = crate::hostcall::register(|_c| {});
-                c.gpr.rax = thunk;
+                // Give the calling thread its own fiber handle so other fibers can
+                // switch back to it.
+                c.gpr.rax = crate::fibers::convert_current();
                 true
             }
             ("kernel32.dll", "ConvertFiberToThread") => { c.gpr.rax = 1; true }
+            ("kernel32.dll", "GetCurrentFiber") => {
+                c.gpr.rax = crate::fibers::current_handle();
+                true
+            }
             ("kernel32.dll", "GetCurrentThread") | ("kernel32.dll", "GetCurrentProcess") => { c.gpr.rax = 0xffff_ffff_ffff_ffff; true }
             ("kernel32.dll", "DuplicateHandle") => {
                 // (hSrcProcess, hSource, hTargetProcess, lpTarget, access,
@@ -1331,28 +1454,6 @@ fn host_disk_space(dir: &std::path::Path) -> (u64, u64) {
     }
 }
 
-/// Build a fiber "handle" as a hostcall thunk that runs the fiber proc nested
-/// on the calling thread (D019). Returns 0 when the start address is not in
-/// the guest image (Windows would fail the CreateFiber too).
-unsafe fn make_fiber(cpu: *mut GowCpu, start_va: u64, param: u64) -> u64 {
-    let c = &*cpu;
-    if start_va < c.image_base || start_va >= c.image_base + c.image_size {
-        let n = MISSING.fetch_add(1, Ordering::Relaxed);
-        if n < 16 { crate::glog!("[gow.fiber] CreateFiber start 0x{start_va:x} outside the image -> NULL"); }
-        return 0;
-    }
-    let rva = (start_va - c.image_base) as u32;
-    let thunk = crate::hostcall::register(move |cc| {
-        unsafe {
-            (*cc).gpr.rcx = param;
-            crate::glog!("[gow.fiber] enter rva=0x{rva:x}");
-            crate::dispatch::gow_run(cc, rva);
-            crate::glog!("[gow.fiber] return rva=0x{rva:x}");
-        }
-    });
-    thunk
-}
-
 // ---------------------------------------------------------------------------
 // VERSION.dll: a minimal fake version resource (D019)
 // ---------------------------------------------------------------------------
@@ -1535,6 +1636,7 @@ fn guard_head(align: usize) -> usize { if align > GUARD { align } else { GUARD }
 extern "C" {
     fn mmap(addr: *mut u8, len: usize, prot: i32, flags: i32, fd: i32, off: i64) -> *mut u8;
     fn munmap(addr: *mut u8, len: usize) -> i32;
+    fn mincore(addr: *mut u8, len: usize, vec: *mut u8) -> i32;
 }
 #[cfg(unix)]
 mod sys {
@@ -1915,6 +2017,22 @@ fn backed_pages() -> &'static Mutex<std::collections::HashSet<u64>> {
     T.get_or_init(|| Mutex::new(std::collections::HashSet::new()))
 }
 
+/// True when the kernel already has a mapping at this (untagged, page-aligned)
+/// address. `try_back_page` must never `MAP_FIXED` over such a page: the guest
+/// TEB, guest stacks and per-module TLS blocks are ordinary host allocations
+/// that can fall inside MARGIN of one of our big reserves, and remapping them
+/// zeroes live guest state. That was the non-deterministic boot failure where
+/// `gs:[0x58]` suddenly read 0 immediately after a 264 MiB heap reserve landed
+/// near the malloc arena (0xb400_0077...): the TEB page was silently replaced
+/// with a fresh zero page.
+#[cfg(unix)]
+fn page_already_mapped(page: u64) -> bool {
+    let mut vec = [0u8; 1];
+    unsafe { mincore(page as *mut u8, 0x1000, vec.as_mut_ptr()) == 0 }
+}
+#[cfg(not(unix))]
+fn page_already_mapped(_page: u64) -> bool { false }
+
 /// Lazily map the 4 KiB page holding `addr` if it is plausibly part of a range we
 /// reserved (or a modest margin past one). Windows keeps a VirtualAlloc reserve
 /// accessible to commit; the engine's memory manager walks a free-list that can
@@ -1953,6 +2071,13 @@ pub fn try_back_page(addr: u64) -> bool {
         if set.contains(&page) {
             return true;
         }
+    }
+    // A page the kernel already maps (TEB, guest stack, TLS block, or any other
+    // live host allocation inside MARGIN) must be left alone: MAP_FIXED|ANON
+    // would replace it with zeros. Remember it as usable and return.
+    if page_already_mapped(page) {
+        backed_pages().lock().unwrap_or_else(|e| e.into_inner()).insert(page);
+        return true;
     }
     #[cfg(unix)]
     unsafe {

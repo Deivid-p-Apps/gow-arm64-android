@@ -201,6 +201,7 @@ pub unsafe fn refresh_tls_template(cpu: *mut GowCpu) {
     let c = &*cpu;
     if c.teb == 0 { return; }
     let tls_ptr = *((c.teb + 0x58) as *const u64);
+    crate::glog!("[gow.teb] refresh teb=0x{:x} [0x58]=0x{tls_ptr:x}", c.teb);
     if tls_ptr == 0 { return; }
     let slot0 = *(tls_ptr as *const u64);
     if slot0 == 0 { return; }
@@ -327,6 +328,35 @@ pub unsafe fn host_boot_with_table(game_dir: &str, table: *const GowFuncEntry) -
     }
     set_import_resolver(std::sync::Arc::new(res));
 
+    // Host DXVK. The APK ships Android-WSI libraries, which cannot present to
+    // X11, so the host uses a DXVK Native build with the SDL2 WSI
+    // (tools/build_dxvk_host.sh). Load it before the guest runs so
+    // D3D11CreateDevice/CreateDXGIFactory1 resolve instead of hitting the
+    // "unresolved gfx import" path. GOW_GFX_BACKEND=native skips this.
+    if !crate::vk_native::bridge::is_enabled() {
+        let dir = std::env::var("GOW_DXVK_DIR")
+            .unwrap_or_else(|_| format!("{game_dir}/dxvk-host"));
+        if std::path::Path::new(&format!("{dir}/libdxvk_dxgi.so")).exists() {
+            let g = crate::graphics::GraphicsBridge::new();
+            if g.autoload(&dir) {
+                crate::glog!("[host] DXVK host backend (SDL2 WSI) loaded from {dir}");
+                // DXVK's SDL2 WSI queries Vulkan extensions inside
+                // CreateDXGIFactory1 (before any window exists), so SDL video
+                // must be initialised first or SDL_Vulkan_GetInstanceExtensions
+                // dereferences an uninitialised driver and segfaults.
+                if crate::sdl2win::ensure_video() {
+                    crate::glog!("[host] SDL2 video initialised for DXVK WSI");
+                } else {
+                    crate::glog!("[host] WARNING: SDL2 video unavailable; DXVK WSI may crash");
+                }
+            } else {
+                crate::glog!("[host] DXVK host backend failed to load from {dir}");
+            }
+        } else {
+            crate::glog!("[host] no host DXVK in {dir} (set GOW_DXVK_DIR); D3D imports unresolved");
+        }
+    }
+
     // Bring up the graphics backend so the game's D3D11 calls are handled. On
     // the host the DXVK .so are not in an APK; GOW_GFX_BACKEND=native selects the
     // built-in renderer (no DXVK needed), which is how the host loop drives the
@@ -410,20 +440,37 @@ impl GowCpu {
             // code like `mov rax,[gs:0x58]; mov rdx,[rax]; mov [rdx+0x80],..` fault.
             std::ptr::write_bytes(tls_ptr as *mut u8, 0, 0x800);
             for i in 0..128u64 {
-                // 1 MiB per module TLS block. The image template alone is 0x11f0,
-                // and the CRT keeps a growable per-module array past it
-                // (`[tls + 0xf8 + idx*8]`, where idx is a live counter). 4 KiB was
-                // far too small and 64 KiB still overflowed in the engine's
-                // GPU/VRAM probe (f_40a610) on Android, where the block is a
-                // tagged scudo allocation whose end is a hard wall. 1 MiB is
-                // cheap (lazy/zeroed) and gives the counter enormous headroom.
-                let blk = alloc_guest_block(0x100000);
+                // Module 0 (the game image) needs a big TLS block: the image
+                // template alone is 0x11f0 and the CRT keeps a growable array
+                // past it (`[tls + 0xf8 + idx*8]`); the engine's GPU/VRAM probe
+                // overflowed 64 KiB. The other 127 slots belong to modules we
+                // never actually load (the CRT/D3D DLLs are emulated), so a
+                // 64 KiB block is plenty and keeps the per-CPU footprint at
+                // ~9 MiB instead of 128 MiB (7 CPUs used to exhaust the heap).
+                let blk_size = if i == 0 { 0x100000usize } else { 0x10000usize };
+                let blk = alloc_guest_block(blk_size);
                 if !blk.is_null() {
-                    std::ptr::write_bytes(blk, 0, 0x100000);
+                    std::ptr::write_bytes(blk, 0, blk_size);
                     *((tls_ptr + i * 8) as *mut u64) = blk as u64;
                 }
             }
+            // Slot 0 (module 0's TLS block) is mandatory: every gs:[0x58] TLS
+            // access dereferences it. If the big block could not be allocated
+            // (memory pressure), retry with progressively smaller sizes rather
+            // than leaving a NULL slot that breaks the CRT/engine allocator.
+            if *((tls_ptr) as *const u64) == 0 {
+                for sz in [0x100000usize, 0x40000, 0x10000, 0x4000] {
+                    let blk = alloc_guest_block(sz);
+                    if !blk.is_null() {
+                        *((tls_ptr) as *mut u64) = blk as u64;
+                        crate::glog!("[gow.teb] WARN slot0 fell back to {sz} bytes");
+                        break;
+                    }
+                }
+            }
             *((teb + 0x58) as *mut u64) = tls_ptr;               // ThreadLocalStoragePointer
+            crate::glog!("[gow.teb] new teb=0x{teb:x} tls_ptr=0x{tls_ptr:x} [0x58]=0x{:x} slot0=0x{:x}",
+                *((teb + 0x58) as *const u64), *(tls_ptr as *const u64));
             // Module 0's TLS block (slot 0) must contain a COPY of the image's
             // TLS template: Windows' loader memcpys [StartAddressOfRawData,
             // EndAddressOfRawData) into every thread's TLS block at thread start.
@@ -633,6 +680,17 @@ pub unsafe extern "C" fn gow_test_cc(cpu: *mut GowCpu, cc: u32) -> u64 {
 
 #[no_mangle]
 pub unsafe extern "C" fn gow_load(cpu: *mut GowCpu, addr: u64, size: u32) -> u64 {
+    {
+        let t = (*cpu).teb;
+        if t != 0 && addr >= t + 0x50 && addr < t + 0x68 {
+            static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            if N.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 24 {
+                let val = if size == 8 { *(addr as *const u64) } else { 0 };
+                let slot0 = if val != 0 { *(val as *const u64) } else { 0 };
+                crate::glog!("[gow.tebtrace] load addr=0x{addr:x} val=0x{val:x} slot0=0x{slot0:x} teb=0x{t:x} rsp=0x{:x} rva=0x{:x}", (*cpu).gpr.rsp, (*cpu).rip.wrapping_sub((*cpu).image_base));
+            }
+        }
+    }
     if !plausible_mem(addr, size as u64) {
         // Mirror gow_store: back a page that belongs to (or sits just past) one
         // of our reserves, then read it, so the engine's pool walk does not abort.
@@ -668,6 +726,15 @@ pub unsafe extern "C" fn gow_load(cpu: *mut GowCpu, addr: u64, size: u32) -> u64
 
 #[no_mangle]
 pub unsafe extern "C" fn gow_store(cpu: *mut GowCpu, addr: u64, v: u64, size: u32) {
+    {
+        let t = (*cpu).teb;
+        if t != 0 && addr >= t + 0x50 && addr < t + 0x68 {
+            static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            if N.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 24 {
+                crate::glog!("[gow.tebtrace] store addr=0x{addr:x} v=0x{v:x} teb=0x{t:x} rva=0x{:x}", (*cpu).rip.wrapping_sub((*cpu).image_base));
+            }
+        }
+    }
     if !plausible_mem(addr, size as u64) {
         // The page may be inside an engine pool that spans a range we reserved
         // but never touched, or just past it (the engine's VRAM manager sizes a
@@ -789,7 +856,9 @@ pub fn plausible_mem(addr: u64, len: u64) -> bool {
     // kills the run. Back the page lazily when it belongs to one of our reserves,
     // then verify with /proc/self/maps so the fault becomes a logged
     // badload/badstore and the engine keeps running — the same policy as the
-    // other validators.
+    // other validators. `try_back_page` is safe to call first: it refuses to
+    // remap a page the kernel already maps (mincore), so it can only back a
+    // genuinely absent page.
     if crate::win32::try_back_page(addr) {
         return true;
     }
@@ -2011,8 +2080,15 @@ pub unsafe extern "C" fn gow_run(cpu: *mut GowCpu, entry_rva: u32) {
     crate::crashlog::set_current_cpu(cpu);
     start_sampler(cpu);
     let c = &mut *cpu;
-    let map: HashMap<u32, GowFunc> = registry().iter().cloned().collect();
-    c.func_map = map;
+    // The registry is process-global and immutable, but a nested `gow_run`
+    // (e.g. `crt::call` driving an `_initterm` callback / qsort comparator)
+    // re-enters this function with `func_map` already populated. Rebuilding the
+    // 96k-entry HashMap on every nested call was pure overhead and dominated the
+    // profile. Only fill it when empty.
+    if c.func_map.is_empty() {
+        let map: HashMap<u32, GowFunc> = registry().iter().cloned().collect();
+        c.func_map = map;
+    }
     // Push a sentinel so the outermost `ret` ends the dispatch loop.
     gow_push64(cpu, STOP_RVA as u64);
     c.next_rva = entry_rva;

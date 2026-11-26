@@ -192,6 +192,12 @@ pub struct ThreadTable {
     /// handle -> "thread finished" flag (D019): WaitForSingleObject on a
     /// thread handle waits on this.
     done: Mutex<HashMap<u64, Arc<(Mutex<bool>, Condvar)>>>,
+    /// handle -> start gate for a thread created with CREATE_SUSPENDED. The host
+    /// thread blocks on it until ResumeThread releases it. The engine creates its
+    /// job workers suspended, fills their job structs, and only then resumes
+    /// them; running them early made them read uninitialised state and call a
+    /// null job pointer (D038).
+    gates: Mutex<HashMap<u64, Arc<(Mutex<bool>, Condvar)>>>,
 }
 
 impl ThreadTable {
@@ -200,12 +206,42 @@ impl ThreadTable {
             next: AtomicU64::new(0x8000),
             tids: Mutex::new(HashMap::new()),
             done: Mutex::new(HashMap::new()),
+            gates: Mutex::new(HashMap::new()),
         }
     }
 
+    /// ResumeThread(handle): open the start gate. Returns the previous suspend
+    /// count (1 if it was suspended, 0 if it was already running).
+    pub fn resume(&self, handle: u64) -> u64 {
+        let Some(g) = self.gates.lock().unwrap().get(&handle).cloned() else { return 0 };
+        let (lock, cv) = &*g;
+        let mut started = lock.lock().unwrap();
+        let prev = if *started { 0 } else { 1 };
+        *started = true;
+        cv.notify_all();
+        prev
+    }
+
+    /// SuspendThread(handle): close the gate again (best effort). Returns the
+    /// previous suspend count.
+    pub fn suspend(&self, handle: u64) -> u64 {
+        let Some(g) = self.gates.lock().unwrap().get(&handle).cloned() else { return 0 };
+        let (lock, _cv) = &*g;
+        let mut started = lock.lock().unwrap();
+        let prev = if *started { 0 } else { 1 };
+        *started = false;
+        prev
+    }
+
     /// Spawn a guest thread running recompiled code at `start_rva` with `param`
-    /// in RCX. The guest function table must already be installed.
+    /// in RCX. When `suspended` is true the host thread blocks on its gate until
+    /// `resume(handle)` is called (CREATE_SUSPENDED semantics). The guest
+    /// function table must already be installed.
     pub unsafe fn spawn(&self, parent: *mut GowCpu, start_rva: u64, param: u64) -> u64 {
+        self.spawn_ex(parent, start_rva, param, false)
+    }
+
+    pub unsafe fn spawn_ex(&self, parent: *mut GowCpu, start_rva: u64, param: u64, suspended: bool) -> u64 {
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         // The engine's thread struct pointer arrives as the _beginthreadex arg.
         // A small value (i*0x80) means its backing array was allocated at 0 — a
@@ -225,11 +261,26 @@ impl ThreadTable {
         self.tids.lock().unwrap().insert(id, tid);
         let finished = Arc::new((Mutex::new(false), Condvar::new()));
         self.done.lock().unwrap().insert(id, finished.clone());
+        // Start gate: open immediately unless created suspended.
+        let gate = Arc::new((Mutex::new(!suspended), Condvar::new()));
+        self.gates.lock().unwrap().insert(id, gate.clone());
         let image_base = (*parent).image_base;
         let image_size = (*parent).image_size as usize;
         let map: Vec<(u32, GowFunc)> = (*parent).func_map.iter().map(|(k, v)| (*k, *v)).collect();
         std::thread::spawn(move || {
             crate::win32::set_current_tid(tid);
+            // Wait for ResumeThread when the creator asked for CREATE_SUSPENDED.
+            {
+                let (lock, cv) = &*gate;
+                let mut started = lock.lock().unwrap();
+                while !*started {
+                    started = cv.wait(started).unwrap();
+                }
+            }
+            if crate::dispatch::plausible_mem(param + 0x10, 8) {
+                let f = unsafe { *((param + 0x10) as *const u64) };
+                log_line(&format!("[gow.thread] resumed param=0x{param:x} [param+0x10]=0x{f:x} tid={tid}"));
+            }
             let cpu = GowCpu::new(image_base, image_size);
             let c = Box::into_raw(cpu);
             for (rva, f) in map { (*c).func_map.insert(rva, f); }

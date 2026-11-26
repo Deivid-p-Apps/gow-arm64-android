@@ -129,8 +129,10 @@ impl GraphicsBridge {
             return crate::vk_native::d3d11_objects::ensure_backend();
         }
         // DXVK reads this inside wsi::init() and throws if it is unset/unmatched.
-        // Must be set before the first D3D11/DXGI call.
-        self.set_wsi_driver("Android");
+        // Must be set before the first D3D11/DXGI call. "Android" is correct for
+        // the APK; the host build uses the SDL2 WSI and sets GOW_DXVK_WSI=SDL2.
+        let wsi = std::env::var("GOW_DXVK_WSI").unwrap_or_else(|_| "Android".to_string());
+        self.set_wsi_driver(&wsi);
         // On-screen HUD with FPS and frame times (DXVK reads DXVK_HUD at init).
         self.set_hud("fps,frametimes,gpuload,devinfo");
         // Capture DXVK's own log to a file in the game folder so a failed

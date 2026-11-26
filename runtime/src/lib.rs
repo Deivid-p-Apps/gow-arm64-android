@@ -11,6 +11,8 @@ pub mod input;
 pub mod audio;
 pub mod fileio;
 pub mod graphics;
+pub mod sdl2win;
+pub mod fibers;
 pub mod adrenotools;
 pub mod dxbc;
 pub mod threads;

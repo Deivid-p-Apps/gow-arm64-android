@@ -187,3 +187,86 @@ Correções:
 Resultado (host runner, Turnip): o jogo REAL passa do `f_40a610`, roda o `_initterm`
 completo e entra no loop de jobs com as 6 threads de trabalho — sem abortar
 (exit=timeout, não SIGSEGV). Antes: SIGSEGV antes de qualquer thread.
+
+## D035 — `try_back_page` nunca remapeia página já mapeada (corrupção do TEB)
+O boot era não-determinístico: em ~50% dos runs `gs:[0x58]` (TLS array) virava 0
+logo depois de uma reserva de heap crescer, e o `operator new` do engine
+devolvia `param` base-0 (`0x0`, `0x80`, ...). O `[gow.tebtrace]` mostrou o MESMO
+TEB criado, com `[teb+0x58]` passando de válido para 0 na mesma milissegundo da
+linha `[gow.heap] reserved=1696MiB`.
+
+Causa: `plausible_mem` chamava `try_back_page` antes de qualquer checagem e o
+`try_back_page` considerava "perto" (raio de 8 GiB) de uma `BIG_RANGE` qualquer
+página — inclusive o TEB, o stack guest e os blocos TLS, que são alocações
+normais do malloc do host em `0xb400_0077...`. O `mmap(MAP_FIXED|ANON)` zerava a
+página viva. Correção: `page_already_mapped()` via `mincore()` antes do
+`MAP_FIXED`; se a página existe, apenas memoriza em `backed_pages()` e retorna.
+Mantém-se a ordem antiga (`try_back_page` antes de `is_mapped`) porque o cache de
+`/proc/self/maps` pode estar defasado; o guard de `mincore` é o que torna a
+chamada segura.
+
+## D036 — DXVK no host com WSI SDL2 (X11) e ponte HWND→`SDL_Window*`
+O DXVK do APK usa `vkCreateAndroidSurfaceKHR`/`ANativeWindow` e não apresenta no
+X11 do harness. O DXVK Native 3.1.1 tem WSI SDL2; `tools/build_dxvk_host.sh`
+compila `libdxvk_dxgi.so`/`libdxvk_d3d11.so` com `-Dnative_sdl2=enabled` (e o
+patch 0006 de relaxamento para Adreno/Turnip). O WSI trata o `OutputWindow` do
+D3D11 como um `SDL_Window*` literal (`reinterpret_cast`), então
+`runtime/src/sdl2win.rs` cria uma janela SDL2 real (dlopen, sem link) e o
+handler de `user32!CreateWindowExA` devolve esse ponteiro como HWND.
+`GOW_DXVK_WSI=SDL2` seleciona o driver e `GOW_DXVK_DIR` aponta as `.so`.
+Handlers mínimos de janela (`GetClientRect`, `ShowWindow`, `PeekMessageA`,
+`MonitorFromWindow`, `EnumDisplaySettingsA`, ...) foram adicionados para o
+engine/DXGI não receberem 0.
+
+## D037 — Descoberta de funções "address-taken" (`lea` RIP-relativo) + `func_map` cacheado
+O boot travava no gerenciador de jobs (`0xcf98c0`, dequeue) sem chegar a criar a
+janela. O `[gow.sample]` mostrava o main thread preso em `rva=0x156250` com
+`unimpl` crescendo, e o gdb mostrou que `0x156250` é uma função real (um
+comparador `std::less`, com **369 referências `lea rax,[rip+disp]`**) que **não
+tinha entrada liftada**: o lifter só semeava (a) alvos diretos de `call`/`jmp` e
+(b) ponteiros **absolutos** em seções de dados. Uma função cujo endereço é
+materializado por `lea` (RIp-relativo) não tem `.pdata` nem ponteiro absoluto,
+então ficava de fora; a chamada indireta virava `MISSFN`, que apenas **retorna
+sem executar** — o loop de registro/comparação do engine então repetia para
+sempre.
+
+Correções:
+- `recompiler/src/lift.rs`: na descoberta por fixpoint, seguir também
+  `lea reg,[rip+disp]` cujo alvo cai em `.text`, 16-alinhado, e semear como
+  entrada (mesma heurística do scan de ponteiros). Isso adicionou ~1180 funções
+  (96324 -> 97506), incluindo `f_156250` e `f_d37ba0`.
+- `runtime/src/dispatch.rs::gow_run`: só montar o `func_map` (HashMap de 97k
+  entradas) quando ele está vazio. `crt::call`/`call_guest` reentram em `gow_run`
+  para cada callback de `_initterm`/qsort e o rebuild do mapa dominava o perfil.
+
+## D038 — `_beginthreadex`/`CreateThread` honram `CREATE_SUSPENDED` (initflag & 4)
+O engine cria os workers do job system com `CREATE_SUSPENDED` (initflag=4): a
+thread nasce parada, o engine preenche o struct do job (o campo `[param+0x10]`,
+o corpo do worker) e só então chama `ResumeThread`. Rodávamos a thread
+imediatamente, então o worker lia `[param+0x10]=0` e chamava um ponteiro nulo,
+morrendo na hora. Agora `ThreadTable` tem um *start gate* por thread: quando
+`suspended`, o host thread bloqueia na condvar até `ResumeThread(handle)` abrir o
+gate; `SuspendThread` fecha de novo. `_beginthreadex` lê o `initflag` (5º
+argumento, `[rsp+0x28]`) e `CreateThread` lê o `flags` (5º argumento) e repassa.
+
+## D039 — `TlsSetValue`/`FlsSetValue` usam o MESMO array que `gs:[0x58]`
+O engine lê o "fiber atual" com `mov rax,[gs:0x58]; mov rcx,[rax]; ... [rcx]`,
+acessando o **ThreadLocalStoragePointer** (o array de *expansion slots*). O
+runtime antigo guardava `TlsSetValue`/`FlsSetValue` dos índices <64 num bloco
+inline separado (TEB+0x148), então um valor gravado via FLS era invisível para
+as leituras TLS cruas compiladas no binário — o job system gravava seu fiber e
+lia 0 de volta, chamando `SwitchToFiber(0)`. Agora ambos usam
+`[gs:0x58][idx]`.
+
+## D040 — Fibers fiéis a corrotina (handoff por thread host)
+`SwitchToFiber` é um switch de corrotina **real**: um worker dá o switch no
+*meio* da execução e espera ser retomado exatamente ali, com registradores e
+pilha intactos. A emulação antiga rodava o fiber alvo como chamada aninhada
+(só funciona se o fiber roda até o fim); num loop yield/resume isso trava. O
+novo `runtime/src/fibers.rs` dá a **cada fiber sua própria thread host e seu
+próprio `GowCpu`** (registradores + pilha + TEB) e `SwitchToFiber` faz handoff:
+a thread chamadora concede o bastão ao alvo e bloqueia até alguém devolvê-lo.
+Assim um switch suspende exatamente uma thread e retoma exatamente uma — a mesma
+semântica observável de uma corrotina stackful, sem `swapcontext` (ausente no
+bionic do Termux). `CreateFiber`/`ConvertThreadToFiber`/`GetCurrentFiber` usam
+handles em `0x0f00_...`, distintos dos thunks de hostcall.

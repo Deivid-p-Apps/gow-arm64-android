@@ -293,6 +293,25 @@ pub fn lift(pe: &PeImage, out_dir: &std::path::Path) -> Result<LiftOutput> {
                             if t >= tva && t < tend && entries.insert(t) { added += 1; }
                         }
                     }
+                    // Address-taken functions: `lea reg, [rip+disp]` materialises a
+                    // function pointer the engine stores in vtables/job tables and
+                    // calls indirectly. These have no `.pdata` entry and no absolute
+                    // pointer in a data section (the reloc is a RIP-relative lea), so
+                    // the scans above miss them and the indirect call became
+                    // `[gow.MISSFN] dispatch to rva=... no lifted entry` — the main
+                    // thread then spun in the job manager waiting on work that
+                    // function should do (e.g. 0x156250, a std::less comparator with
+                    // 369 lea references). Seed every in-.text, 16-aligned target.
+                    if insn.mnemonic() == iced_x86::Mnemonic::Lea
+                        && insn.is_ip_rel_memory_operand()
+                    {
+                        let t = (insn.ip_rel_memory_address().wrapping_sub(pe.image_base)) as u64;
+                        if t < 0xffff_ffff {
+                            let t = t as u32;
+                            if t >= tva && t < tend && t % 16 == 0
+                                && entries.insert(t) { added += 1; }
+                        }
+                    }
                 }
             }
             eprintln!("[discover] round +{added} (total {})", entries.len());
@@ -325,6 +344,19 @@ pub fn lift(pe: &PeImage, out_dir: &std::path::Path) -> Result<LiftOutput> {
 
     // Split functions into fixed-size shards so each translation unit stays
     std::fs::create_dir_all(out_dir)?;
+    // Remove shard/table files from a previous run. Shards are numbered by
+    // emitted byte size, so a code change can yield FEWER shards; a leftover
+    // `gow_shard_NNN.c` would define the same `f_<rva>` symbols twice and the
+    // link would fail with duplicate symbols.
+    if let Ok(rd) = std::fs::read_dir(out_dir) {
+        for e in rd.flatten() {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            if (name.starts_with("gow_shard_") || name.starts_with("gow_table")) && name.ends_with(".c") {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    }
     let entries_vec: Vec<u32> = entries.iter().cloned().collect();
     // Sorted pdata map for fast end lookup.
     let pdata_sorted: Vec<(u32, u32)> = {

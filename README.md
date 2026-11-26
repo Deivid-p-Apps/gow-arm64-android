@@ -14,10 +14,15 @@ stays out of this repo (see `.gitignore`).
 | Path | Contents |
 |---|---|
 | `recompiler/` | Rust: PE32+ parser, function discovery (.pdata/entry/TLS), x86-64 → C lifter (iced-x86) |
-| `runtime/` | Rust: guest dispatcher, register file, guest memory, control-flow map; Win32/NT + D3D11→Vulkan layer (in progress) |
+| `runtime/` | Rust: guest dispatcher, register file, guest memory, control-flow map; Win32/NT layer + D3D11→Vulkan via DXVK (host DXVK on X11, APK uses Android WSI) |
 | `runtime/include/gow_guest.h` | ABI seen by generated C |
+| `runtime/src/fibers.rs` | Cooperative fibers backed by host threads (the job scheduler's `SwitchToFiber` yield/resume) |
+| `runtime/src/sdl2win.rs` | SDL2↔HWND bridge for the host DXVK WSI (dlopen, no link) |
 | `tools/pe_probe.py` | PE reconnaissance (headers, sections, imports, exports, .pdata, TLS) |
-| `docs/` | STATUS.md, DECISIONS.md, NOTES.md |
+| `tools/build_dxvk_host.sh` | Build DXVK Native with the **SDL2 WSI** for the Termux host (X11) |
+| `tools/run_x11_capture.sh` | Run the game on `:1` and capture the X11 screenshot |
+| `tools/build_host_boot.sh` | Build the host harness that runs the recompiled game natively |
+| `docs/` | STATUS.md, DECISIONS.md, NOTES.md, GRAPHICS.md, WIN32_COVERAGE.md |
 | `.github/workflows/build.yml` | CI: builds recompiler and the Android APK artifact |
 
 ## Build & use
@@ -31,7 +36,8 @@ python3 tools/pe_probe.py "/path/to/GoW.exe"
 # 2) build the recompiler and lift the whole game to C
 cargo build -p gow-recompiler --release
 ./target/release/gowrecomp "/path/to/GoW.exe" generated
-#  -> generated/gow_shard_NNN.c (35 shards), gow_table.c, gow_protos.h
+#  -> generated/gow_shard_NNN.c (214 shards), gow_table.c, gow_protos.h
+#     97,506 functions (incl. address-taken ones discovered via RIP-relative lea)
 ```
 
 ### Build the recompiled game into a native library
@@ -47,6 +53,28 @@ tools/build_game_so.sh "/path/to/GoW.exe" out
 On desktop, `clang` produces a host `.so` useful for testing the dispatcher; for
 the device, pass the NDK clang (e.g. `aarch64-linux-android34-clang`) as the
 third argument.
+
+### Host harness (run the recompiled game natively, DXVK on X11)
+
+The recompiled game also runs on the Termux host against a real X11 display,
+which is how the graphics path is driven today (screenshot per run):
+
+```sh
+# 1) build DXVK Native with the SDL2 WSI (needs meson, ninja, sdl2, glslang)
+tools/build_dxvk_host.sh           # -> $GOW_DXVK_DIR/{libdxvk_dxgi,libdxvk_d3d11}.so
+
+# 2) build the runtime + harness
+cargo build -p gow-runtime --release --features hostboot
+JOBS=2 tools/build_host_boot.sh    # -> .../hostboot/host_boot
+
+# 3) run on :1, capture a screenshot
+BACKEND=dxvk DUR=40 tools/run_x11_capture.sh /path/to/god /path/to/shot.png
+```
+
+Notes: DXVK must live under `$HOME` (the FUSE `/storage` mount is not
+`dlopen`-able), SDL2 needs a `libSDL2-2.0.so.0` soname symlink, and `:1` is an
+Xvfb display. `GOW_GFX_BACKEND=native` selects the built-in Rust Vulkan backend
+instead of DXVK.
 
 ### APK
 
@@ -87,25 +115,29 @@ Legend: ✅ done · 🟡 partial · ⬜ not started · 🔒 blocked on game file
 ```
 M0  Reconnaissance                     ✅  PE32+ parsed; 7 sections, 579 imports, 61 exports,
                                            51,869 functions in .pdata; device identified
-M1  Loader + recompiler                ✅  lift 51,869 funcs / 2,754,847 insns, coverage 99.9919%
-                                           (224 traps); generated C compiles (clang -O2, arm64);
-                                           control flow proven end-to-end (rax=15 test)
+M1  Loader + recompiler                ✅  97,506 functions lifted (incl. address-taken via RIP-rel
+                                           lea), ~6.64M instructions; generated C compiles
+                                           (clang -O2, arm64); control flow proven (rax=15 test)
 M2  Runtime reaches game main          🟡  dispatcher, guest mem/stack, exact int flags, SSE/SSE2/
                                            AVX subset, x87, MMX; Win32 layer (files/threads/
-                                           sync/heap/time); Steamworks + Sony stubs
-M3  Window + graphics device           🟡  Vulkan bootstrap + android surface + Turnip driver load;
-                                           DXVK Native integration in progress
+                                           sync/heap/time/fibers); Steamworks + Sony stubs;
+                                           host runs the engine to its job system (2653 static
+                                           initializers, workers created)
+M3  Window + graphics device           🟡  DXVK Native boots on the host (X11/SDL2 WSI): Vulkan
+                                           instance + Turnip + VK_KHR_xlib_surface;
+                                           CreateDXGIFactory1 = S_OK. Swapchain/window creation
+                                           is the next step (APK path uses Android WSI)
 M4  Main menu renders                  ⬜
 M5  Gameplay playable                  ⬜
 M6  50+ FPS stable                     ⬜  (hardware ceiling on Adreno 725 — see PERFORMANCE.md)
-M7  Native Rust Vulkan backend         ⬜  (phase 2; DXVK is the phase-1 fallback)
+M7  Native Rust Vulkan backend         🟡  (built-in backend exists, present path; DXVK is default)
 M8  Polish / robustness                ⬜
 ```
 
 ```
 Recompiler     [####################] 100%   (whole executable lifted, .so links)
-Runtime core   [################----]  80%   (M2: Win32 layer + COM hostcall in progress)
-Graphics       [######--------------]  30%   (M3: Vulkan up; DXVK not yet building)
+Runtime core   [################----]  82%   (M2: Win32 layer + fibers position + COM hostcall)
+Graphics       [#######-------------]  35%   (M3: DXVK instance up on host; swapchain next)
 Audio          [########------------]  40%   (XAudio2->AAudio engine + mixer; not wired to device)
 Input          [##########----------]  50%   (XInput->Android model + JNI; overlay pending)
 Android shell  [############--------]  60%   (APK builds/installs/runs; game .so inside)
@@ -124,14 +156,17 @@ engineering, `docs/PERFORMANCE.md` the measurement methodology, and
 `docs/GRAPHICS.md` the D3D11->Vulkan plan.
 
 Current phase: M1 complete, M2/M3 in progress — the recompiler lifts the whole
-executable (51,869 functions, 2,754,847 instructions, 99.9919% coverage), the
-generated C compiles with the Android clang, control flow is proven end-to-end,
-a real arm64 APK builds in CI and runs on the connected device, and the runtime
-provides the dispatcher, memory, integer/flags, SSE/SSE2/AVX subset, x87, the
-Win32 file/thread/sync layer, a COM hostcall mechanism, the XAudio2→AAudio engine
-and XInput→Android input, plus a Vulkan + Turnip driver bootstrap. Still to come:
-the D3D11 renderer (DXVK Native), the swapchain, wiring audio/input to the device,
-and the game reaching its main.
+executable (97,506 functions, ~6.64M instructions, incl. address-taken functions
+found via RIP-relative `lea`), the generated C compiles with the Android clang,
+control flow is proven end-to-end, a real arm64 APK builds in CI and runs on the
+connected device, and the runtime provides the dispatcher, memory,
+integer/flags, SSE/SSE2/AVX subset, x87, the Win32 file/thread/sync/fiber layer,
+a COM hostcall mechanism, the XAudio2→AAudio engine and XInput→Android input,
+plus a Vulkan + Turnip driver bootstrap. On the host the engine now boots to its
+**job system** (2,653 static initializers) and DXVK Native brings up a Vulkan
+instance on X11/Turnip (`VK_KHR_xlib_surface`, `CreateDXGIFactory1 = S_OK`).
+Still to come: creating the window/swapchain (D3D11 device), wiring
+audio/input to the device, and the game reaching its main and rendering.
 
 ## Legal
 

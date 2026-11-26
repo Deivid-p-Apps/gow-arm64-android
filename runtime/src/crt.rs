@@ -245,12 +245,25 @@ pub unsafe fn call(cpu: *mut GowCpu, func: &str) -> bool {
         | "_controlfp" | "_set_new_mode" | "_configthreadlocale" => 0,
         "_getpid" => std::process::id() as u64,
         // _beginthreadex(security, stack_size, start_address, arg, initflag, thrdaddr):
-        // start in R8, arg in R9. Returns a REAL thread handle (D019): the old
-        // code returned a constant 0x1234, so the engine's ResumeThread/
-        // GetThreadId/WaitForSingleObject on worker handles were operating on
-        // garbage. Routed through the ThreadTable when the resolver is
-        // installed (device); the host-test fallback keeps the old spawn.
-        "_beginthreadex" => spawn_guest_thread(cpu, a2, a3),
+        // start in R8, arg in R9, initflag is the 5th arg (on the shadow stack).
+        // Returns a REAL thread handle (D019): the old code returned a constant
+        // 0x1234, so the engine's ResumeThread/GetThreadId/WaitForSingleObject on
+        // worker handles were operating on garbage. Routed through the
+        // ThreadTable when the resolver is installed (device); the host-test
+        // fallback keeps the old spawn. CREATE_SUSPENDED (initflag & 4) is
+        // honoured: the engine creates job workers suspended, fills their job
+        // structs, then resumes them (D038).
+        "_beginthreadex" => {
+            // initflag is the 5th argument: MS x64 puts it at [rsp+0x28] after
+            // the return address + 4 shadow slots.
+            let initflag = if plausible_mem(c.gpr.rsp + 0x28, 4) {
+                *((c.gpr.rsp + 0x28) as *const u32) as u64
+            } else { 0 };
+            let slot10 = if plausible_mem(a3 + 0x10, 8) { *((a3 + 0x10) as *const u64) } else { 0 };
+            let slot18 = if plausible_mem(a3 + 0x18, 8) { *((a3 + 0x18) as *const u64) } else { 0 };
+            crate::glog!("[gow.crt] _beginthreadex start=0x{a2:x} arg=0x{a3:x} initflag=0x{initflag:x} [arg+0x10]=0x{slot10:x} [arg+0x18]=0x{slot18:x}");
+            spawn_guest_thread(cpu, a2, a3, initflag & 0x4 != 0)
+        }
         "_endthreadex" | "_cexit" | "_c_exit" | "exit" | "_exit" => 0,
         "_get_narrow_winmain_command_line" => {
             let s = b"GoW.exe\0";
@@ -399,15 +412,18 @@ unsafe fn call_guest(cpu: *mut GowCpu, va: u64) {
 /// Returns the thread handle (D019): routed through the ThreadTable when the
 /// import resolver is installed (device runs), so ResumeThread/
 /// WaitForSingleObject/GetThreadId work on the handle; the host-test fallback
-/// spawns directly and returns the old fake handle.
-unsafe fn spawn_guest_thread(cpu: *mut GowCpu, start_va: u64, arg: u64) -> u64 {
+/// spawns directly and returns the old fake handle. When `suspended` (from
+/// _beginthreadex's initflag CREATE_SUSPENDED), the thread blocks until
+/// ResumeThread — the engine creates its job workers suspended, fills their
+/// job structs, then resumes them (D038).
+unsafe fn spawn_guest_thread(cpu: *mut GowCpu, start_va: u64, arg: u64, suspended: bool) -> u64 {
     let c = &*cpu;
     if start_va < c.image_base || start_va >= c.image_base + c.image_size {
         return 0;
     }
     let rva = (start_va - c.image_base) as u32;
     if let Some(r) = crate::dispatch::import_resolver() {
-        return r.threads.spawn(cpu, rva as u64, arg);
+        return r.threads.spawn_ex(cpu, rva as u64, arg, suspended);
     }
     let base = c.image_base;
     let size = c.image_size as usize;
