@@ -289,17 +289,24 @@ impl GraphicsBridge {
     pub unsafe fn call_addr_raw(addr: usize, c: *mut crate::dispatch::GowCpu) -> u64 {
         let cpu = &*c;
         let rsp = cpu.gpr.rsp;
+        // 5th..10th args live in the shadow space; validate each slot before
+        // reading it (a wild RSP must not fault the host — same policy as the
+        // import handlers in win32.rs).
+        let stk = |off: u64| -> u64 {
+            let p = rsp + off;
+            if crate::dispatch::plausible_mem(p, 8) { *(p as *const u64) } else { 0 }
+        };
         let a = [
             cpu.gpr.rcx,
             cpu.gpr.rdx,
             cpu.gpr.r8,
             cpu.gpr.r9,
-            *((rsp as *const u8).add(0x28) as *const u64),
-            *((rsp as *const u8).add(0x30) as *const u64),
-            *((rsp as *const u8).add(0x38) as *const u64),
-            *((rsp as *const u8).add(0x40) as *const u64),
-            *((rsp as *const u8).add(0x48) as *const u64),
-            *((rsp as *const u8).add(0x50) as *const u64),
+            stk(0x28),
+            stk(0x30),
+            stk(0x38),
+            stk(0x40),
+            stk(0x48),
+            stk(0x50),
         ];
         Self::call_addr(addr, a)
     }
