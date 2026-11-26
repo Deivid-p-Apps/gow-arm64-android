@@ -116,8 +116,7 @@ impl GraphicsBridge {
     ///
     /// dxgi is loaded first: `libdxvk_d3d11.so` has `DT_NEEDED libdxvk_dxgi.so`,
     /// so loading its dependency explicitly first keeps one shared copy.
-    pub fn autoload(&self, native_lib_dir: &str) -> bool {
-        // DXVK reads this inside wsi::init() and throws if it is unset/unmatched.
+    pub fn autoload(&self, native_lib_dir: &str) -> bool {        // DXVK reads this inside wsi::init() and throws if it is unset/unmatched.
         // Must be set before the first D3D11/DXGI call.
         self.set_wsi_driver("Android");
         // On-screen HUD with FPS and frame times (DXVK reads DXVK_HUD at init).
@@ -166,6 +165,13 @@ impl GraphicsBridge {
             crate::glog!("[gow.gfx] no custom driver; DXVK uses the system Vulkan loader");
             return false;
         };
+        // Diagnostic: DXVK rejects an adapter if the Vulkan 1.2 feature
+        // `storageBuffer8BitAccess` is missing ("Device does not support
+        // required feature 'storageBuffer8BitAccess'"). Query the SAME
+        // vkGetInstanceProcAddr DXVK gets, so we can confirm whether the custom
+        // driver reports the feature (and the apiVersion) correctly, or whether
+        // the raw-driver GIPA lacks the device entrypoints (features read 0).
+        unsafe { probe_driver_features(gipa as usize); }
         let mut any = false;
         for dll in ["dxgi.dll", "d3d11.dll"] {
             let Some(handle) = self.handle(dll) else { continue };
@@ -303,6 +309,76 @@ impl GraphicsBridge {
 
 const RTLD_NOW: i32 = 2;
 const RTLD_GLOBAL: i32 = 0x100;
+
+/// Diagnostic: through the exact `vkGetInstanceProcAddr` handed to DXVK, create
+/// an instance and report the first physical device's `apiVersion` and the
+/// Vulkan-1.2 `storageBuffer8BitAccess` feature. If the entrypoint is NULL (raw
+/// driver GIPA without a loader), the feature reads as 0 — which is exactly the
+/// "Device does not support required feature 'storageBuffer8BitAccess'" DXVK
+/// prints before refusing the adapter.
+unsafe fn probe_driver_features(gipa: usize) {
+    type Gipa = unsafe extern "C" fn(*mut std::ffi::c_void, *const std::os::raw::c_char)
+        -> *mut std::ffi::c_void;
+    let g: Gipa = std::mem::transmute(gipa);
+    let name = |s: &str| std::ffi::CString::new(s).unwrap();
+    let gp = |s: &str| g(std::ptr::null_mut(), name(s).as_ptr());
+    if gp("vkCreateInstance").is_null() {
+        crate::glog!("[gow.gfx.diag] vkCreateInstance missing from driver GIPA");
+        return;
+    }
+    #[repr(C)]
+    struct App { s_type: u32, _p: *const u8, _n: *const u8, _av: u32, _e: *const u8, _ev: u32, api: u32 }
+    let app = App { s_type: 0, _p: std::ptr::null(), _n: std::ptr::null(), _av: 0, _e: std::ptr::null(), _ev: 0, api: 1 << 22 };
+    #[repr(C)]
+    struct Ici { s_type: u32, p_next: *const u8, flags: u32, p_app: *const App, lc: u32, ln: *const u8, ec: u32, en: *const u8 }
+    let ici = Ici { s_type: 1, p_next: std::ptr::null(), flags: 0, p_app: &app, lc: 0, ln: std::ptr::null(), ec: 0, en: std::ptr::null() };
+    type Ci = unsafe extern "C" fn(*const Ici, *const u8, *mut *mut std::ffi::c_void) -> i32;
+    let ci: Ci = std::mem::transmute(gp("vkCreateInstance"));
+    let mut inst: *mut std::ffi::c_void = std::ptr::null_mut();
+    let r = ci(&ici, std::ptr::null(), &mut inst);
+    crate::glog!("[gow.gfx.diag] vkCreateInstance(bare) -> {r}");
+    if r != 0 || inst.is_null() { return; }
+    let gi = |s: &str| g(inst, name(s).as_ptr());
+    let ep = gi("vkEnumeratePhysicalDevices");
+    if ep.is_null() { crate::glog!("[gow.gfx.diag] vkEnumeratePhysicalDevices NULL"); return; }
+    type Ep = unsafe extern "C" fn(*mut std::ffi::c_void, *mut u32, *mut *mut std::ffi::c_void) -> i32;
+    let ep: Ep = std::mem::transmute(ep);
+    let mut n = 0u32;
+    ep(inst, &mut n, std::ptr::null_mut());
+    let mut devs = [std::ptr::null_mut::<std::ffi::c_void>(); 8];
+    ep(inst, &mut n, devs.as_mut_ptr());
+    crate::glog!("[gow.gfx.diag] {n} physical device(s)");
+    let gp2 = gi("vkGetPhysicalDeviceProperties");
+    if !gp2.is_null() {
+        #[repr(C)]
+        struct Props { api: u32, driver: u32, vendor: u32, device: u32, dtype: u32, name: [u8; 256] }
+        type Gp = unsafe extern "C" fn(*mut std::ffi::c_void, *mut Props);
+        let gp: Gp = std::mem::transmute(gp2);
+        for i in 0..(n.min(8) as usize) {
+            let mut p: Props = std::mem::zeroed();
+            gp(devs[i], &mut p);
+            let nm = std::ffi::CStr::from_ptr(p.name.as_ptr() as *const _).to_string_lossy();
+            crate::glog!("[gow.gfx.diag] dev[{i}] {nm} api={}.{}.{} driver=0x{:x}",
+                p.api >> 22, (p.api >> 12) & 0x3ff, p.api & 0xfff, p.driver);
+        }
+    }
+    let gf2 = gi("vkGetPhysicalDeviceFeatures2");
+    crate::glog!("[gow.gfx.diag] vkGetPhysicalDeviceFeatures2 = {:p}", gf2);
+    if !gf2.is_null() {
+        #[repr(C)]
+        struct V12 { s_type: u32, p_next: *const u8, mirror: u32, draw: u32, sb8: u32 }
+        #[repr(C)]
+        struct Pf2 { s_type: u32, p_next: *const u8, p12: *mut V12 }
+        type Gf2 = unsafe extern "C" fn(*mut std::ffi::c_void, *mut Pf2);
+        let gf2: Gf2 = std::mem::transmute(gf2);
+        for i in 0..(n.min(8) as usize) {
+            let mut v12 = V12 { s_type: 1000050000, p_next: std::ptr::null(), mirror: 0, draw: 0, sb8: 0 };
+            let mut pf = Pf2 { s_type: 1000059000, p_next: std::ptr::null(), p12: &mut v12 };
+            gf2(devs[i], &mut pf);
+            crate::glog!("[gow.gfx.diag] dev[{i}] storageBuffer8BitAccess={}", v12.sb8);
+        }
+    }
+}
 
 extern "C" {
     fn dlopen(path: *const std::os::raw::c_char, mode: i32) -> *mut std::ffi::c_void;
