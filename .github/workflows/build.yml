@@ -84,6 +84,8 @@ jobs:
           grep -q "DXVK_WSI_ANDROID" meson.build
           test -f src/wsi/android/wsi_platform_android.cpp
           grep -q "dxvk_android_set_window" src/d3d11/d3d11.sym src/dxgi/dxgi.sym
+          # 0006: Adreno/Turnip feature relaxation (DXVK-Sarek style).
+          grep -q "GOW_RELAX(require)" src/dxvk/dxvk_device_info.cpp
       - name: Write Meson cross file
         run: |
           NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"

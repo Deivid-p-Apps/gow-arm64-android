@@ -1,0 +1,63 @@
+--- a/src/dxvk/dxvk_device_info.cpp
++++ b/src/dxvk/dxvk_device_info.cpp
+@@ -10,6 +10,14 @@
+ 
+ namespace dxvk {
+ 
++  /* GOW/Adreno: mark DXVK feature/extension requirements as *optional* so the
++   * adapter is created even when the Android loader reports a 1.2/1.3 feature
++   * (e.g. storageBuffer8BitAccess) as unsupported. Mirrors DXVK-Sarek for
++   * mobile GPUs: a missing feature is a rendering glitch, not a boot failure. */
++#ifndef GOW_RELAX
++#define GOW_RELAX(require) (false)
++#endif
++
+   #define CORE_VERSIONS                            \
+     HANDLE_CORE(vk11);                             \
+     HANDLE_CORE(vk12);                             \
+@@ -744,7 +752,7 @@
+ 
+ 
+   std::optional<std::string> DxvkDeviceCapabilities::checkDeviceCompatibility() {
+-    if (m_properties.core.properties.apiVersion < DxvkVulkanApiVersion) {
++    if (m_properties.core.properties.apiVersion < VK_API_VERSION_1_1) {
+       return str::format("Device does not support Vulkan ",
+         VK_API_VERSION_MAJOR(DxvkVulkanApiVersion), ".",
+         VK_API_VERSION_MINOR(DxvkVulkanApiVersion));
+@@ -764,7 +772,8 @@
+       }
+     }
+ 
+-    if (!m_featuresEnabled.extDescriptorHeap.descriptorHeap && m_properties.core.properties.limits.maxPushConstantsSize < MaxTotalPushDataSize)
++    /* GOW: relaxed for Adreno/Turnip (maxPushConstantsSize can be 128). */
++    if (false && !m_featuresEnabled.extDescriptorHeap.descriptorHeap && m_properties.core.properties.limits.maxPushConstantsSize < MaxTotalPushDataSize)
+       return str::format("Device does not support ", MaxTotalPushDataSize, " of push data");
+ 
+     return std::nullopt;
+@@ -804,7 +813,7 @@
+       FeatureEntry { nullptr, nullptr,                    \
+         &m_featuresSupported.version.name,                \
+         &m_featuresEnabled.version.name,                  \
+-        require, #name }
++        GOW_RELAX(require), #name }
+ 
+     #define ENABLE_EXT(ext, require)                      \
+       FeatureEntry {                                      \
+@@ -812,7 +821,7 @@
+         &m_extensionsEnabled.ext,                         \
+         &m_featuresSupported.ext,                         \
+         &m_featuresEnabled.ext,                           \
+-        require, #ext }
++        GOW_RELAX(require), #ext }
+ 
+     #define ENABLE_EXT_FEATURE(ext, name, require)        \
+       FeatureEntry {                                      \
+@@ -820,7 +829,7 @@
+         &m_extensionsEnabled.ext,                         \
+         &m_featuresSupported.ext.name,                    \
+         &m_featuresEnabled.ext.name,                      \
+-        require, #name }
++        GOW_RELAX(require), #name }
+ 
+     return {{
+       ENABLE_FEATURE(core.features, depthBiasClamp, true),

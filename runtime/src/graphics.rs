@@ -328,7 +328,7 @@ unsafe fn probe_driver_features(gipa: usize) {
     }
     #[repr(C)]
     struct App { s_type: u32, _p: *const u8, _n: *const u8, _av: u32, _e: *const u8, _ev: u32, api: u32 }
-    let app = App { s_type: 0, _p: std::ptr::null(), _n: std::ptr::null(), _av: 0, _e: std::ptr::null(), _ev: 0, api: 1 << 22 };
+    let app = App { s_type: 0, _p: std::ptr::null(), _n: std::ptr::null(), _av: 0, _e: std::ptr::null(), _ev: 0, api: (1u32 << 22) | (3 << 12) };
     #[repr(C)]
     struct Ici { s_type: u32, p_next: *const u8, flags: u32, p_app: *const App, lc: u32, ln: *const u8, ec: u32, en: *const u8 }
     let ici = Ici { s_type: 1, p_next: std::ptr::null(), flags: 0, p_app: &app, lc: 0, ln: std::ptr::null(), ec: 0, en: std::ptr::null() };
