@@ -3,28 +3,785 @@
 static inline int64_t sign64(uint64_t v) { return (int64_t)v; }
 
 void f_1000(GowCpu* cpu) {
-L_1000: ;
+L_1000: ; cpu->rip = 0x140001000ull;
   /* 0x1000: call 0x0000000140001010h */
   gow_push64(cpu, 0x1005u);
+  gow_trace_enter(cpu, 0x1010u);
   f_1010(cpu);
   gow_pop64(cpu);
-L_1005: ;
+L_1005: ; cpu->rip = 0x140001005ull;
   /* 0x1005: mov rax,rcx */
   GOW_REG(cpu, rax) = GOW_REG(cpu, rcx);
+L_1008: ; cpu->rip = 0x140001008ull;
+  /* 0x1008: ret */
+  return;
+L_1009: ; cpu->rip = 0x140001009ull;
+  /* 0x1009: nop */
+L_100a: ; cpu->rip = 0x14000100aull;
+  /* 0x100a: nop */
+L_100b: ; cpu->rip = 0x14000100bull;
+  /* 0x100b: nop */
+L_100c: ; cpu->rip = 0x14000100cull;
+  /* 0x100c: nop */
+L_100d: ; cpu->rip = 0x14000100dull;
+  /* 0x100d: nop */
+L_100e: ; cpu->rip = 0x14000100eull;
+  /* 0x100e: nop */
+L_100f: ; cpu->rip = 0x14000100full;
+  /* 0x100f: nop */
 }
 
 void f_1010(GowCpu* cpu) {
-L_1010: ;
+L_1010: ; cpu->rip = 0x140001010ull;
   /* 0x1010: nop */
-L_1011: ;
+L_1011: ; cpu->rip = 0x140001011ull;
   /* 0x1011: add rcx,5 */
   { uint64_t _a = GOW_REG(cpu, rcx); uint64_t _b = 0x5ull; uint64_t _r = gow_add64(cpu, _a, _b, 64); GOW_REG(cpu, rcx) = _r; }
-L_1015: ;
+L_1015: ; cpu->rip = 0x140001015ull;
   /* 0x1015: ret */
   return;
-L_1016: ;
+L_1016: ; cpu->rip = 0x140001016ull;
   /* 0x1016: nop */
-L_1017: ;
+L_1017: ; cpu->rip = 0x140001017ull;
   /* 0x1017: nop */
+L_1018: ; cpu->rip = 0x140001018ull;
+  /* 0x1018: nop */
+L_1019: ; cpu->rip = 0x140001019ull;
+  /* 0x1019: nop */
+L_101a: ; cpu->rip = 0x14000101aull;
+  /* 0x101a: nop */
+L_101b: ; cpu->rip = 0x14000101bull;
+  /* 0x101b: nop */
+L_101c: ; cpu->rip = 0x14000101cull;
+  /* 0x101c: nop */
+L_101d: ; cpu->rip = 0x14000101dull;
+  /* 0x101d: nop */
+L_101e: ; cpu->rip = 0x14000101eull;
+  /* 0x101e: nop */
+L_101f: ; cpu->rip = 0x14000101full;
+  /* 0x101f: nop */
+L_1020: ; cpu->rip = 0x140001020ull;
+  /* 0x1020: nop */
+L_1021: ; cpu->rip = 0x140001021ull;
+  /* 0x1021: nop */
+L_1022: ; cpu->rip = 0x140001022ull;
+  /* 0x1022: nop */
+L_1023: ; cpu->rip = 0x140001023ull;
+  /* 0x1023: nop */
+L_1024: ; cpu->rip = 0x140001024ull;
+  /* 0x1024: nop */
+L_1025: ; cpu->rip = 0x140001025ull;
+  /* 0x1025: nop */
+L_1026: ; cpu->rip = 0x140001026ull;
+  /* 0x1026: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1028: ; cpu->rip = 0x140001028ull;
+  /* 0x1028: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_102a: ; cpu->rip = 0x14000102aull;
+  /* 0x102a: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_102c: ; cpu->rip = 0x14000102cull;
+  /* 0x102c: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_102e: ; cpu->rip = 0x14000102eull;
+  /* 0x102e: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1030: ; cpu->rip = 0x140001030ull;
+  /* 0x1030: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1032: ; cpu->rip = 0x140001032ull;
+  /* 0x1032: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1034: ; cpu->rip = 0x140001034ull;
+  /* 0x1034: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1036: ; cpu->rip = 0x140001036ull;
+  /* 0x1036: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1038: ; cpu->rip = 0x140001038ull;
+  /* 0x1038: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_103a: ; cpu->rip = 0x14000103aull;
+  /* 0x103a: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_103c: ; cpu->rip = 0x14000103cull;
+  /* 0x103c: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_103e: ; cpu->rip = 0x14000103eull;
+  /* 0x103e: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1040: ; cpu->rip = 0x140001040ull;
+  /* 0x1040: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1042: ; cpu->rip = 0x140001042ull;
+  /* 0x1042: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1044: ; cpu->rip = 0x140001044ull;
+  /* 0x1044: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1046: ; cpu->rip = 0x140001046ull;
+  /* 0x1046: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1048: ; cpu->rip = 0x140001048ull;
+  /* 0x1048: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_104a: ; cpu->rip = 0x14000104aull;
+  /* 0x104a: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_104c: ; cpu->rip = 0x14000104cull;
+  /* 0x104c: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_104e: ; cpu->rip = 0x14000104eull;
+  /* 0x104e: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1050: ; cpu->rip = 0x140001050ull;
+  /* 0x1050: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1052: ; cpu->rip = 0x140001052ull;
+  /* 0x1052: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1054: ; cpu->rip = 0x140001054ull;
+  /* 0x1054: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1056: ; cpu->rip = 0x140001056ull;
+  /* 0x1056: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1058: ; cpu->rip = 0x140001058ull;
+  /* 0x1058: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_105a: ; cpu->rip = 0x14000105aull;
+  /* 0x105a: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_105c: ; cpu->rip = 0x14000105cull;
+  /* 0x105c: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_105e: ; cpu->rip = 0x14000105eull;
+  /* 0x105e: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1060: ; cpu->rip = 0x140001060ull;
+  /* 0x1060: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1062: ; cpu->rip = 0x140001062ull;
+  /* 0x1062: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1064: ; cpu->rip = 0x140001064ull;
+  /* 0x1064: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1066: ; cpu->rip = 0x140001066ull;
+  /* 0x1066: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1068: ; cpu->rip = 0x140001068ull;
+  /* 0x1068: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_106a: ; cpu->rip = 0x14000106aull;
+  /* 0x106a: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_106c: ; cpu->rip = 0x14000106cull;
+  /* 0x106c: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_106e: ; cpu->rip = 0x14000106eull;
+  /* 0x106e: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1070: ; cpu->rip = 0x140001070ull;
+  /* 0x1070: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1072: ; cpu->rip = 0x140001072ull;
+  /* 0x1072: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1074: ; cpu->rip = 0x140001074ull;
+  /* 0x1074: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1076: ; cpu->rip = 0x140001076ull;
+  /* 0x1076: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1078: ; cpu->rip = 0x140001078ull;
+  /* 0x1078: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_107a: ; cpu->rip = 0x14000107aull;
+  /* 0x107a: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_107c: ; cpu->rip = 0x14000107cull;
+  /* 0x107c: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_107e: ; cpu->rip = 0x14000107eull;
+  /* 0x107e: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1080: ; cpu->rip = 0x140001080ull;
+  /* 0x1080: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1082: ; cpu->rip = 0x140001082ull;
+  /* 0x1082: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1084: ; cpu->rip = 0x140001084ull;
+  /* 0x1084: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1086: ; cpu->rip = 0x140001086ull;
+  /* 0x1086: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1088: ; cpu->rip = 0x140001088ull;
+  /* 0x1088: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_108a: ; cpu->rip = 0x14000108aull;
+  /* 0x108a: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_108c: ; cpu->rip = 0x14000108cull;
+  /* 0x108c: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_108e: ; cpu->rip = 0x14000108eull;
+  /* 0x108e: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1090: ; cpu->rip = 0x140001090ull;
+  /* 0x1090: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1092: ; cpu->rip = 0x140001092ull;
+  /* 0x1092: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1094: ; cpu->rip = 0x140001094ull;
+  /* 0x1094: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1096: ; cpu->rip = 0x140001096ull;
+  /* 0x1096: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1098: ; cpu->rip = 0x140001098ull;
+  /* 0x1098: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_109a: ; cpu->rip = 0x14000109aull;
+  /* 0x109a: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_109c: ; cpu->rip = 0x14000109cull;
+  /* 0x109c: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_109e: ; cpu->rip = 0x14000109eull;
+  /* 0x109e: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10a0: ; cpu->rip = 0x1400010a0ull;
+  /* 0x10a0: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10a2: ; cpu->rip = 0x1400010a2ull;
+  /* 0x10a2: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10a4: ; cpu->rip = 0x1400010a4ull;
+  /* 0x10a4: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10a6: ; cpu->rip = 0x1400010a6ull;
+  /* 0x10a6: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10a8: ; cpu->rip = 0x1400010a8ull;
+  /* 0x10a8: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10aa: ; cpu->rip = 0x1400010aaull;
+  /* 0x10aa: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10ac: ; cpu->rip = 0x1400010acull;
+  /* 0x10ac: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10ae: ; cpu->rip = 0x1400010aeull;
+  /* 0x10ae: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10b0: ; cpu->rip = 0x1400010b0ull;
+  /* 0x10b0: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10b2: ; cpu->rip = 0x1400010b2ull;
+  /* 0x10b2: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10b4: ; cpu->rip = 0x1400010b4ull;
+  /* 0x10b4: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10b6: ; cpu->rip = 0x1400010b6ull;
+  /* 0x10b6: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10b8: ; cpu->rip = 0x1400010b8ull;
+  /* 0x10b8: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10ba: ; cpu->rip = 0x1400010baull;
+  /* 0x10ba: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10bc: ; cpu->rip = 0x1400010bcull;
+  /* 0x10bc: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10be: ; cpu->rip = 0x1400010beull;
+  /* 0x10be: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10c0: ; cpu->rip = 0x1400010c0ull;
+  /* 0x10c0: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10c2: ; cpu->rip = 0x1400010c2ull;
+  /* 0x10c2: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10c4: ; cpu->rip = 0x1400010c4ull;
+  /* 0x10c4: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10c6: ; cpu->rip = 0x1400010c6ull;
+  /* 0x10c6: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10c8: ; cpu->rip = 0x1400010c8ull;
+  /* 0x10c8: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10ca: ; cpu->rip = 0x1400010caull;
+  /* 0x10ca: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10cc: ; cpu->rip = 0x1400010ccull;
+  /* 0x10cc: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10ce: ; cpu->rip = 0x1400010ceull;
+  /* 0x10ce: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10d0: ; cpu->rip = 0x1400010d0ull;
+  /* 0x10d0: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10d2: ; cpu->rip = 0x1400010d2ull;
+  /* 0x10d2: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10d4: ; cpu->rip = 0x1400010d4ull;
+  /* 0x10d4: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10d6: ; cpu->rip = 0x1400010d6ull;
+  /* 0x10d6: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10d8: ; cpu->rip = 0x1400010d8ull;
+  /* 0x10d8: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10da: ; cpu->rip = 0x1400010daull;
+  /* 0x10da: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10dc: ; cpu->rip = 0x1400010dcull;
+  /* 0x10dc: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10de: ; cpu->rip = 0x1400010deull;
+  /* 0x10de: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10e0: ; cpu->rip = 0x1400010e0ull;
+  /* 0x10e0: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10e2: ; cpu->rip = 0x1400010e2ull;
+  /* 0x10e2: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10e4: ; cpu->rip = 0x1400010e4ull;
+  /* 0x10e4: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10e6: ; cpu->rip = 0x1400010e6ull;
+  /* 0x10e6: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10e8: ; cpu->rip = 0x1400010e8ull;
+  /* 0x10e8: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10ea: ; cpu->rip = 0x1400010eaull;
+  /* 0x10ea: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10ec: ; cpu->rip = 0x1400010ecull;
+  /* 0x10ec: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10ee: ; cpu->rip = 0x1400010eeull;
+  /* 0x10ee: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10f0: ; cpu->rip = 0x1400010f0ull;
+  /* 0x10f0: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10f2: ; cpu->rip = 0x1400010f2ull;
+  /* 0x10f2: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10f4: ; cpu->rip = 0x1400010f4ull;
+  /* 0x10f4: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10f6: ; cpu->rip = 0x1400010f6ull;
+  /* 0x10f6: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10f8: ; cpu->rip = 0x1400010f8ull;
+  /* 0x10f8: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10fa: ; cpu->rip = 0x1400010faull;
+  /* 0x10fa: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10fc: ; cpu->rip = 0x1400010fcull;
+  /* 0x10fc: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_10fe: ; cpu->rip = 0x1400010feull;
+  /* 0x10fe: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1100: ; cpu->rip = 0x140001100ull;
+  /* 0x1100: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1102: ; cpu->rip = 0x140001102ull;
+  /* 0x1102: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1104: ; cpu->rip = 0x140001104ull;
+  /* 0x1104: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1106: ; cpu->rip = 0x140001106ull;
+  /* 0x1106: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1108: ; cpu->rip = 0x140001108ull;
+  /* 0x1108: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_110a: ; cpu->rip = 0x14000110aull;
+  /* 0x110a: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_110c: ; cpu->rip = 0x14000110cull;
+  /* 0x110c: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_110e: ; cpu->rip = 0x14000110eull;
+  /* 0x110e: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1110: ; cpu->rip = 0x140001110ull;
+  /* 0x1110: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1112: ; cpu->rip = 0x140001112ull;
+  /* 0x1112: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1114: ; cpu->rip = 0x140001114ull;
+  /* 0x1114: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1116: ; cpu->rip = 0x140001116ull;
+  /* 0x1116: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1118: ; cpu->rip = 0x140001118ull;
+  /* 0x1118: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_111a: ; cpu->rip = 0x14000111aull;
+  /* 0x111a: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_111c: ; cpu->rip = 0x14000111cull;
+  /* 0x111c: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_111e: ; cpu->rip = 0x14000111eull;
+  /* 0x111e: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1120: ; cpu->rip = 0x140001120ull;
+  /* 0x1120: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1122: ; cpu->rip = 0x140001122ull;
+  /* 0x1122: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1124: ; cpu->rip = 0x140001124ull;
+  /* 0x1124: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1126: ; cpu->rip = 0x140001126ull;
+  /* 0x1126: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1128: ; cpu->rip = 0x140001128ull;
+  /* 0x1128: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_112a: ; cpu->rip = 0x14000112aull;
+  /* 0x112a: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_112c: ; cpu->rip = 0x14000112cull;
+  /* 0x112c: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_112e: ; cpu->rip = 0x14000112eull;
+  /* 0x112e: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1130: ; cpu->rip = 0x140001130ull;
+  /* 0x1130: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1132: ; cpu->rip = 0x140001132ull;
+  /* 0x1132: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1134: ; cpu->rip = 0x140001134ull;
+  /* 0x1134: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1136: ; cpu->rip = 0x140001136ull;
+  /* 0x1136: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1138: ; cpu->rip = 0x140001138ull;
+  /* 0x1138: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_113a: ; cpu->rip = 0x14000113aull;
+  /* 0x113a: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_113c: ; cpu->rip = 0x14000113cull;
+  /* 0x113c: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_113e: ; cpu->rip = 0x14000113eull;
+  /* 0x113e: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1140: ; cpu->rip = 0x140001140ull;
+  /* 0x1140: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1142: ; cpu->rip = 0x140001142ull;
+  /* 0x1142: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1144: ; cpu->rip = 0x140001144ull;
+  /* 0x1144: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1146: ; cpu->rip = 0x140001146ull;
+  /* 0x1146: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1148: ; cpu->rip = 0x140001148ull;
+  /* 0x1148: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_114a: ; cpu->rip = 0x14000114aull;
+  /* 0x114a: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_114c: ; cpu->rip = 0x14000114cull;
+  /* 0x114c: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_114e: ; cpu->rip = 0x14000114eull;
+  /* 0x114e: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1150: ; cpu->rip = 0x140001150ull;
+  /* 0x1150: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1152: ; cpu->rip = 0x140001152ull;
+  /* 0x1152: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1154: ; cpu->rip = 0x140001154ull;
+  /* 0x1154: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1156: ; cpu->rip = 0x140001156ull;
+  /* 0x1156: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1158: ; cpu->rip = 0x140001158ull;
+  /* 0x1158: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_115a: ; cpu->rip = 0x14000115aull;
+  /* 0x115a: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_115c: ; cpu->rip = 0x14000115cull;
+  /* 0x115c: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_115e: ; cpu->rip = 0x14000115eull;
+  /* 0x115e: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1160: ; cpu->rip = 0x140001160ull;
+  /* 0x1160: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1162: ; cpu->rip = 0x140001162ull;
+  /* 0x1162: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1164: ; cpu->rip = 0x140001164ull;
+  /* 0x1164: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1166: ; cpu->rip = 0x140001166ull;
+  /* 0x1166: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1168: ; cpu->rip = 0x140001168ull;
+  /* 0x1168: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_116a: ; cpu->rip = 0x14000116aull;
+  /* 0x116a: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_116c: ; cpu->rip = 0x14000116cull;
+  /* 0x116c: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_116e: ; cpu->rip = 0x14000116eull;
+  /* 0x116e: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1170: ; cpu->rip = 0x140001170ull;
+  /* 0x1170: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1172: ; cpu->rip = 0x140001172ull;
+  /* 0x1172: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1174: ; cpu->rip = 0x140001174ull;
+  /* 0x1174: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1176: ; cpu->rip = 0x140001176ull;
+  /* 0x1176: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1178: ; cpu->rip = 0x140001178ull;
+  /* 0x1178: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_117a: ; cpu->rip = 0x14000117aull;
+  /* 0x117a: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_117c: ; cpu->rip = 0x14000117cull;
+  /* 0x117c: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_117e: ; cpu->rip = 0x14000117eull;
+  /* 0x117e: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1180: ; cpu->rip = 0x140001180ull;
+  /* 0x1180: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1182: ; cpu->rip = 0x140001182ull;
+  /* 0x1182: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1184: ; cpu->rip = 0x140001184ull;
+  /* 0x1184: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1186: ; cpu->rip = 0x140001186ull;
+  /* 0x1186: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1188: ; cpu->rip = 0x140001188ull;
+  /* 0x1188: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_118a: ; cpu->rip = 0x14000118aull;
+  /* 0x118a: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_118c: ; cpu->rip = 0x14000118cull;
+  /* 0x118c: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_118e: ; cpu->rip = 0x14000118eull;
+  /* 0x118e: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1190: ; cpu->rip = 0x140001190ull;
+  /* 0x1190: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1192: ; cpu->rip = 0x140001192ull;
+  /* 0x1192: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1194: ; cpu->rip = 0x140001194ull;
+  /* 0x1194: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1196: ; cpu->rip = 0x140001196ull;
+  /* 0x1196: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_1198: ; cpu->rip = 0x140001198ull;
+  /* 0x1198: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_119a: ; cpu->rip = 0x14000119aull;
+  /* 0x119a: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_119c: ; cpu->rip = 0x14000119cull;
+  /* 0x119c: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_119e: ; cpu->rip = 0x14000119eull;
+  /* 0x119e: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11a0: ; cpu->rip = 0x1400011a0ull;
+  /* 0x11a0: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11a2: ; cpu->rip = 0x1400011a2ull;
+  /* 0x11a2: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11a4: ; cpu->rip = 0x1400011a4ull;
+  /* 0x11a4: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11a6: ; cpu->rip = 0x1400011a6ull;
+  /* 0x11a6: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11a8: ; cpu->rip = 0x1400011a8ull;
+  /* 0x11a8: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11aa: ; cpu->rip = 0x1400011aaull;
+  /* 0x11aa: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11ac: ; cpu->rip = 0x1400011acull;
+  /* 0x11ac: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11ae: ; cpu->rip = 0x1400011aeull;
+  /* 0x11ae: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11b0: ; cpu->rip = 0x1400011b0ull;
+  /* 0x11b0: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11b2: ; cpu->rip = 0x1400011b2ull;
+  /* 0x11b2: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11b4: ; cpu->rip = 0x1400011b4ull;
+  /* 0x11b4: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11b6: ; cpu->rip = 0x1400011b6ull;
+  /* 0x11b6: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11b8: ; cpu->rip = 0x1400011b8ull;
+  /* 0x11b8: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11ba: ; cpu->rip = 0x1400011baull;
+  /* 0x11ba: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11bc: ; cpu->rip = 0x1400011bcull;
+  /* 0x11bc: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11be: ; cpu->rip = 0x1400011beull;
+  /* 0x11be: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11c0: ; cpu->rip = 0x1400011c0ull;
+  /* 0x11c0: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11c2: ; cpu->rip = 0x1400011c2ull;
+  /* 0x11c2: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11c4: ; cpu->rip = 0x1400011c4ull;
+  /* 0x11c4: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11c6: ; cpu->rip = 0x1400011c6ull;
+  /* 0x11c6: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11c8: ; cpu->rip = 0x1400011c8ull;
+  /* 0x11c8: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11ca: ; cpu->rip = 0x1400011caull;
+  /* 0x11ca: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11cc: ; cpu->rip = 0x1400011ccull;
+  /* 0x11cc: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11ce: ; cpu->rip = 0x1400011ceull;
+  /* 0x11ce: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11d0: ; cpu->rip = 0x1400011d0ull;
+  /* 0x11d0: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11d2: ; cpu->rip = 0x1400011d2ull;
+  /* 0x11d2: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11d4: ; cpu->rip = 0x1400011d4ull;
+  /* 0x11d4: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11d6: ; cpu->rip = 0x1400011d6ull;
+  /* 0x11d6: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11d8: ; cpu->rip = 0x1400011d8ull;
+  /* 0x11d8: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11da: ; cpu->rip = 0x1400011daull;
+  /* 0x11da: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11dc: ; cpu->rip = 0x1400011dcull;
+  /* 0x11dc: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11de: ; cpu->rip = 0x1400011deull;
+  /* 0x11de: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11e0: ; cpu->rip = 0x1400011e0ull;
+  /* 0x11e0: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11e2: ; cpu->rip = 0x1400011e2ull;
+  /* 0x11e2: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11e4: ; cpu->rip = 0x1400011e4ull;
+  /* 0x11e4: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11e6: ; cpu->rip = 0x1400011e6ull;
+  /* 0x11e6: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11e8: ; cpu->rip = 0x1400011e8ull;
+  /* 0x11e8: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11ea: ; cpu->rip = 0x1400011eaull;
+  /* 0x11ea: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11ec: ; cpu->rip = 0x1400011ecull;
+  /* 0x11ec: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11ee: ; cpu->rip = 0x1400011eeull;
+  /* 0x11ee: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11f0: ; cpu->rip = 0x1400011f0ull;
+  /* 0x11f0: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11f2: ; cpu->rip = 0x1400011f2ull;
+  /* 0x11f2: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11f4: ; cpu->rip = 0x1400011f4ull;
+  /* 0x11f4: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11f6: ; cpu->rip = 0x1400011f6ull;
+  /* 0x11f6: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11f8: ; cpu->rip = 0x1400011f8ull;
+  /* 0x11f8: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11fa: ; cpu->rip = 0x1400011faull;
+  /* 0x11fa: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11fc: ; cpu->rip = 0x1400011fcull;
+  /* 0x11fc: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
+L_11fe: ; cpu->rip = 0x1400011feull;
+  /* 0x11fe: add [rax],al */
+  { uint64_t _a = gow_load(cpu, GOW_REG(cpu, rax), 1); uint64_t _b = (GOW_REG(cpu, rax) & 0xffull); uint64_t _r = gow_add64(cpu, _a, _b, 8); gow_store(cpu, GOW_REG(cpu, rax), _r, 1); }
 }
 

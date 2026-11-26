@@ -122,6 +122,13 @@ impl GraphicsBridge {
         self.set_wsi_driver("Android");
         // On-screen HUD with FPS and frame times (DXVK reads DXVK_HUD at init).
         self.set_hud("fps,frametimes,gpuload,devinfo");
+        // Capture DXVK's own log to a file in the game folder so a failed
+        // CreateDXGIFactory1 (device: 0x80004005) explains itself instead of
+        // only showing the generic E_FAIL. Harmless env vars.
+        self.set_env_default("DXVK_LOG_LEVEL", "info");
+        self.set_env_default("DXVK_LOG_PATH", "/storage/emulated/0/god/Port");
+        self.set_env_default("DXVK_LOG", "1");
+        self.set_env_default("DXVK_DEBUG", "markers");
 
         let dxgi = format!("{native_lib_dir}/libdxvk_dxgi.so");
         let d3d11 = format!("{native_lib_dir}/libdxvk_d3d11.so");
@@ -203,6 +210,14 @@ impl GraphicsBridge {
         if std::env::var_os("DXVK_HUD").is_none() {
             std::env::set_var("DXVK_HUD", spec);
             crate::glog!("[gow.gfx] DXVK_HUD={spec}");
+        }
+    }
+
+    /// Set an env var if it is not already present (DXVK reads config from env).
+    pub fn set_env_default(&self, key: &str, val: &str) {
+        if std::env::var_os(key).is_none() {
+            std::env::set_var(key, val);
+            crate::glog!("[gow.gfx] {key}={val}");
         }
     }
 
