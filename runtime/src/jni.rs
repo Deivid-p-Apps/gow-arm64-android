@@ -16,7 +16,38 @@ pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeInit(
 ) -> c_int {
     let dir = unsafe { jstring_to_string(env, game_dir) };
     crate::glog!("[gow] nativeInit game_dir={dir}");
+    // Redirect the process's stdout/stderr to a file under the game Port dir.
+    // DXVK (a C++ library) logs its failures to stderr, which on Android goes to
+    // /dev/null — so a CreateDXGIFactory1 failure is invisible. Capturing fds 1/2
+    // makes DXVK's own diagnostics readable.
+    redirect_std_to_file(&format!("{dir}/Port/dxvk-fd.log"));
     0
+}
+
+/// dup2 stdout/stderr onto a log file so C/C++ libraries (DXVK) that print to
+/// std streams are captured on Android (where std streams go to /dev/null).
+fn redirect_std_to_file(path: &str) {
+    extern "C" {
+        fn open(path: *const c_char, flags: c_int, ...) -> c_int;
+        fn dup2(oldfd: c_int, newfd: c_int) -> c_int;
+        fn close(fd: c_int) -> c_int;
+    }
+    const O_WRONLY: c_int = 1;
+    const O_CREAT: c_int = 0o100;
+    const O_APPEND: c_int = 0o2000;
+    if let Ok(p) = std::ffi::CString::new(path) {
+        if let Some(parent) = std::path::Path::new(path).parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        unsafe {
+            let fd = open(p.as_ptr(), O_WRONLY | O_CREAT | O_APPEND, 0o644);
+            if fd >= 0 {
+                dup2(fd, 1);
+                dup2(fd, 2);
+                if fd > 2 { close(fd); }
+            }
+        }
+    }
 }
 
 /// Load the recompiled game library and register its function table, then run
