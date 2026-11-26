@@ -264,6 +264,18 @@ pub unsafe fn call(cpu: *mut GowCpu, func: &str) -> bool {
         "_invalid_parameter_noinfo" | "_invalid_parameter_noinfo_noreturn" => 0,
         "_seh_filter_exe" | "_seh_filter_dll" => 0,
         "__sys_nerr" => 0,
+        // errno accessors: return the ADDRESS of a stable per-process int (the
+        // CRT stores through it). The old unimplemented answer returned 0, so
+        // `*_errno() = x` wrote to the null page (a badstore/0-addr fault) and
+        // errno reads always yielded 0.
+        "_errno" | "__acrt_errno" => {
+            static ERRNO: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+            &ERRNO as *const _ as u64
+        }
+        "__doserrno" | "_get_doserrno" => {
+            static DOSERR: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+            &DOSERR as *const _ as u64
+        }
         "__acrt_iob_func" => 0x0000_0c00_0000_0000 + a0 * 0x100, // stable fake FILE*
         "_set_fmode" => 0,
         "__p__commode" => {

@@ -207,6 +207,18 @@ impl ThreadTable {
     /// in RCX. The guest function table must already be installed.
     pub unsafe fn spawn(&self, parent: *mut GowCpu, start_rva: u64, param: u64) -> u64 {
         let id = self.next.fetch_add(1, Ordering::Relaxed);
+        // The engine's thread struct pointer arrives as the _beginthreadex arg.
+        // A small value (i*0x80) means its backing array was allocated at 0 — a
+        // failed allocation upstream — so record the guest return address of the
+        // _beginthreadex call to locate the spawner.
+        let caller_ra = {
+            let sp = (*parent).gpr.rsp;
+            if crate::dispatch::plausible_mem(sp, 8) { *(sp as *const u64) } else { 0 }
+        };
+        if param < 0x1000 {
+            crate::glog!("[gow.thread] SUSPECT param=0x{param:x} (base-0 array?) caller_ra=0x{caller_ra:x} caller_rva=0x{:x}",
+                caller_ra.wrapping_sub((*parent).image_base));
+        }
         // Assign the thread's guest id up front so GetThreadId(handle) and the
         // thread's own GetCurrentThreadId() agree (D017).
         let tid = crate::win32::alloc_tid();
@@ -225,7 +237,6 @@ impl ThreadTable {
             log_line(&format!("[gow.thread] start rva=0x{start_rva:x} param=0x{param:x} caller_rva=0x{:x} tid={tid}",
                 crate::crashlog::current_rva()));
             crate::dispatch::gow_run(c, start_rva as u32);
-            // Thread finished: wake anyone waiting on the handle (D019).
             *finished.0.lock().unwrap() = true;
             finished.1.notify_all();
             drop(Box::from_raw(c));

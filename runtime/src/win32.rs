@@ -1622,7 +1622,7 @@ const PAGE: usize = 0x1000;
 fn heap_alloc_raw(size: usize, align: usize, page: bool) -> *mut u8 {
     let trace = std::env::var_os("GOW_MEMTRACE").is_some();
     if size >= (1024 * 1024) && trace {
-        crate::glog!("[gow.heap] alloc {} KiB align={align} page={page}", size / 1024);
+        crate::glog!("[gow.heap] alloc {} KiB align={align} page={page} rva=0x{:x}", size / 1024, crate::crashlog::current_rva());
     }
     if trace && size >= 0x100000 {
         // nothing more; the return is logged at the end
@@ -1682,7 +1682,14 @@ fn heap_alloc_raw(size: usize, align: usize, page: bool) -> *mut u8 {
     // Zeroed on purpose: the game's error paths are full of uninitialized-read
     // assumptions that pass on Windows' fresh pages.
     let raw = unsafe { std::alloc::alloc_zeroed(layout) };
-    if raw.is_null() { return raw; }
+    if raw.is_null() {
+        let n = REFUSED.fetch_add(1, Ordering::Relaxed);
+        if n < 64 {
+            crate::glog!("[gow.heap] alloc_zeroed RETURNED NULL size={} KiB align={align} rva=0x{:x}",
+                size / 1024, crate::crashlog::current_rva());
+        }
+        return raw;
+    }
     // Hand the guest a pointer GUARD bytes into the block, leaving guard bytes
     // free on both sides so small over/under-runs do not corrupt the native
     // allocator's metadata (the scudo reportHeaderCorruption abort).
