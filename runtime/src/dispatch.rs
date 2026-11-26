@@ -255,6 +255,16 @@ pub fn missing_entry_seen(rva: u32) -> bool {
     g.insert(rva)
 }
 
+/// True the FIRST time each distinct host-call target is seen (dedup): logs the
+/// exact DXVK method RVA and its result so a failing COM call is visible.
+pub fn com_trace_seen(target: u64) -> bool {
+    static S: OnceLock<Mutex<std::collections::HashSet<u64>>> = OnceLock::new();
+    let seen = S.get_or_init(|| Mutex::new(std::collections::HashSet::new()));
+    let mut g = match seen.lock() { Ok(g) => g, Err(p) => p.into_inner() };
+    if g.len() >= 256 { return false; }
+    g.insert(target)
+}
+
 /// Function table emitted by the recompiler (gow_game.c) is registered at
 /// startup via `install_registry`, so no extern symbol is required here.
 
@@ -881,8 +891,13 @@ pub unsafe extern "C" fn gow_call_indirect(cpu: *mut GowCpu, target_va: u64) {
         // AArch64 call and put the result back in RAX. Without this, every COM
         // virtual call on a backend object (CreateSwapChain, GetAdapter,
         // CreateTexture2D, ...) was a MISSCALL and D3D never progressed.
+        let this = c.gpr.rcx;
         let r = crate::graphics::GraphicsBridge::call_addr_raw(target_va as usize, cpu);
         let c = &mut *cpu;
+        if com_trace_seen(target_va) {
+            crate::glog!("[gow.com] host-call @{target_va:#x} this={this:#x} -> rax={r:#x} from rva={:#x}",
+                c.rip.wrapping_sub(c.image_base));
+        }
         c.gpr.rax = r;
     } else {
         c.missing_indirect_calls += 1;
