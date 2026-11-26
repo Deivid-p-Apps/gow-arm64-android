@@ -1837,9 +1837,18 @@ fn start_sampler(cpu: *mut GowCpu) {
 /// Central dispatch loop. Runs until next_rva == STOP_RVA.
 #[no_mangle]
 pub unsafe extern "C" fn gow_run(cpu: *mut GowCpu, entry_rva: u32) {
-    // NOTE: don't install a SIGSEGV handler here — ART wraps sigaction and
-    // re-raising SIG_DFL kills the process mid-run. Diagnostics come from the
-    // gow.badstore/badload validators instead.
+    // NOTE: don't install a SIGSEGV handler by default — on Android ART wraps
+    // sigaction and re-raising SIG_DFL kills the process mid-run. The HOST
+    // harness (Termux, no ART) can opt in with `GOW_CRASHLOG=1` to pinpoint a
+    // faulting guest RVA. (The Termux target is `target_os="android"`, so the
+    // switch must be the env var, not a cfg.)
+    static CRASHLOG_ONCE: std::sync::Once = std::sync::Once::new();
+    CRASHLOG_ONCE.call_once(|| {
+        if std::env::var_os("GOW_CRASHLOG").is_some() {
+            crate::crashlog::install();
+            crate::glog!("[gow.crashlog] SIGSEGV/SIGBUS/SIGABRT handler installed");
+        }
+    });
     crate::crashlog::set_current_cpu(cpu);
     start_sampler(cpu);
     let c = &mut *cpu;

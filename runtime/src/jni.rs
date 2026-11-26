@@ -546,6 +546,21 @@ fn graphics_bridge() -> &'static crate::graphics::GraphicsBridge {
 /// runs, so `D3D11CreateDevice` resolves instead of hitting the unimplemented
 /// import path.
 fn start_graphics_backend(native_lib_dir: &str) {
+    // Native Vulkan backend (GOW_GFX_BACKEND=native): no DXVK .so is loaded; the
+    // renderer is this runtime. DXVK stays the default path below.
+    if crate::vk_native::bridge::is_enabled() {
+        crate::glog!("[gow.vk.native] GOW_GFX_BACKEND=native: using the built-in renderer");
+        let win = unsafe { WINDOW };
+        if !win.is_null() {
+            crate::vk_native::bridge::set_android_window(win);
+        }
+        if crate::vk_native::d3d11_objects::ensure_backend() {
+            crate::glog!("[gow.vk.native] native backend up (device + presenter)");
+        } else {
+            crate::glog!("[gow.vk.native] native backend FAILED to start");
+        }
+        return;
+    }
     let g = graphics_bridge();
     if !g.autoload(native_lib_dir) {
         return; // runtime-only APK; the game will report the unresolved import.
@@ -576,6 +591,11 @@ pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeSurfaceCreated(
     // Push the window into both loaded DXVK libraries (each keeps its own copy).
     // If they are not loaded yet, `start_graphics_backend` does it after dlopen.
     graphics_bridge().set_android_window(android_win);
+    // Native backend: it owns its own instance/swapchain and needs the window too
+    // (an ANativeWindow turns the presenter into a real VkSwapchainKHR present).
+    if crate::vk_native::bridge::is_enabled() {
+        crate::vk_native::bridge::set_android_window(android_win);
+    }
 
     // NOTE: do NOT create our own VkInstance here. DXVK (through the
     // libadrenotools loader) creates the instance itself and owns the swapchain;
@@ -595,6 +615,9 @@ pub extern "system" fn Java_com_gow_arm64_GowActivity_nativeSurfaceChanged(
     let win = unsafe { WINDOW };
     if !win.is_null() {
         graphics_bridge().set_android_window(win);
+        if crate::vk_native::bridge::is_enabled() {
+            crate::vk_native::bridge::set_android_window(win);
+        }
     }
 }
 

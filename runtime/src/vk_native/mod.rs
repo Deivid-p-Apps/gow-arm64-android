@@ -32,8 +32,12 @@ use std::ffi::c_void;
 
 pub mod bridge;
 pub mod d3d11;
+pub mod d3d11_objects;
+pub mod render;
+pub mod scene;
 pub mod selftest;
 pub mod swapchain;
+pub mod x11;
 
 /// Which renderer the port should use. Selected once from `GOW_GFX_BACKEND`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -121,7 +121,14 @@ impl GraphicsBridge {
     ///
     /// dxgi is loaded first: `libdxvk_d3d11.so` has `DT_NEEDED libdxvk_dxgi.so`,
     /// so loading its dependency explicitly first keeps one shared copy.
-    pub fn autoload(&self, native_lib_dir: &str) -> bool {        // DXVK reads this inside wsi::init() and throws if it is unset/unmatched.
+    pub fn autoload(&self, native_lib_dir: &str) -> bool {
+        // Native backend selected: no DXVK .so is loaded; the renderer is
+        // crate::vk_native. DXVK stays the default (GOW_GFX_BACKEND unset).
+        if crate::vk_native::bridge::is_enabled() {
+            crate::glog!("[gow.gfx] GOW_GFX_BACKEND=native: skipping DXVK, using native Vulkan");
+            return crate::vk_native::d3d11_objects::ensure_backend();
+        }
+        // DXVK reads this inside wsi::init() and throws if it is unset/unmatched.
         // Must be set before the first D3D11/DXGI call.
         self.set_wsi_driver("Android");
         // On-screen HUD with FPS and frame times (DXVK reads DXVK_HUD at init).

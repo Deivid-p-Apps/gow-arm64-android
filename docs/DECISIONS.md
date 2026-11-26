@@ -156,3 +156,16 @@ Assim uma feature ausente vira glitch de render, não falha de inicialização.
 Além do DXVK (patch 0006), o projeto ganha um backend Vulkan **nativo em Rust**
 (sem tradução D3D11), selecionável por env var, para não depender do DXVK. Os dois
 coexistem; a seleção é por `GOW_GFX_BACKEND` (default `dxvk`).
+
+## D030 — Chamadas COM virtuais despachadas para código host (DXVK)
+Com o D029/patch 0006 o DXVK aceitou o Turnip e `CreateDXGIFactory1` retornou
+`S_OK`. O passo seguinte falhou: o jogo chama os MÉTODOS VIRTUAIS da factory
+(`CreateSwapChain`, `GetAdapter`, ...), cujo código vive DENTRO do
+`libdxvk_dxgi.so`. O `gow_call_indirect` tratava esses endereços host como
+MISSCALL. Agora:
+- `hostcall` mantém um registro de faixas de código host chamável;
+- `graphics` registra, no dlopen de cada backend, as faixas executáveis lidas de
+  `/proc/self/maps`;
+- `gow_call_indirect`, se o alvo cai numa faixa registrada, faz o marshaling dos
+  registradores MS-x64 do guest para a chamada host e guarda o retorno em RAX
+  (o mesmo caminho já usado para imports da IAT).

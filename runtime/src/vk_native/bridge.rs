@@ -17,14 +17,47 @@
 
 use std::sync::{Mutex, OnceLock};
 
+use super::render::OffscreenTarget;
 use super::swapchain::Swapchain;
+use super::x11::X11Displays;
 use super::NativeDevice;
+
+/// How the native backend puts pixels where the user can see them.
+enum Presenter {
+    /// GPU image shown through X11 (`XPutImage`) — the Termux/desktop path,
+    /// where Turnip cannot present a swapchain without DRI3.
+    X11(X11Displays),
+    /// Normal `VkSwapchainKHR` present (on-device via `ANativeWindow`).
+    Swapchain(Swapchain),
+}
+
+/// Frame state the D3D11 context drives, applied when the next frame presents.
+struct FrameState {
+    /// Clear colour from `ClearRenderTargetView` (RGBA, linear).
+    clear: [f32; 4],
+    /// Pending streamed triangle (pos+colour, 5 floats per vertex), if any.
+    vertices: Option<Vec<[f32; 5]>>,
+}
+
+impl Default for FrameState {
+    fn default() -> Self {
+        FrameState {
+            clear: [0.02, 0.03, 0.06, 1.0],
+            vertices: None,
+        }
+    }
+}
 
 /// The live native backend, if one was created.
 struct Backend {
     device: NativeDevice,
-    swapchain: Swapchain,
+    presenter: Presenter,
+    /// GPU target used when presenting via X11.
+    target: Option<OffscreenTarget>,
+    /// Reusable readback buffer for the X11 path.
+    pixels: Vec<u8>,
     extent: ash::vk::Extent2D,
+    frame: FrameState,
 }
 
 unsafe impl Send for Backend {}
@@ -78,11 +111,39 @@ pub fn create() -> bool {
         width: 1280,
         height: 720,
     };
-    let Some(swapchain) = device.create_swapchain(extent, false) else {
-        crate::glog!("[gow.vk.native] swapchain creation failed");
+
+    // Prefer an X11 window when one is reachable (Termux/Xvfb), because Turnip
+    // cannot present a swapchain without DRI3. Fall back to the Android
+    // swapchain when a real ANativeWindow is present.
+    let presenter;
+    let mut target = None;
+    if let Some(displays) =
+        X11Displays::create_default(extent.width, extent.height, "God of War (native Vulkan)")
+    {
+        match OffscreenTarget::new(&device, extent.width, extent.height) {
+            Some(t) => {
+                crate::glog!("[gow.vk.native] presenting via X11 ({} display(s))", displays.count());
+                target = Some(t);
+                presenter = Presenter::X11(displays);
+            }
+            None => {
+                crate::glog!("[gow.vk.native] offscreen target failed");
+                return false;
+            }
+        }
+    } else if !window_ptr.is_null() {
+        let Some(swapchain) = device.create_swapchain(extent, false) else {
+            crate::glog!("[gow.vk.native] swapchain creation failed");
+            return false;
+        };
+        let extent = swapchain.extent;
+        presenter = Presenter::Swapchain(swapchain);
+    } else {
+        crate::glog!("[gow.vk.native] no X11 display and no ANativeWindow");
         return false;
-    };
-    let extent = swapchain.extent;
+    }
+
+    let pixels = vec![0u8; (extent.width * extent.height * 4) as usize];
     crate::glog!(
         "[gow.vk.native] backend ready: {} {}x{}",
         device.device_name,
@@ -91,37 +152,103 @@ pub fn create() -> bool {
     );
     *guard = Some(Backend {
         device,
-        swapchain,
+        presenter,
+        target,
+        pixels,
         extent,
+        frame: FrameState::default(),
     });
     true
 }
 
-/// Present the red-clear frame (proof path). Returns true if a frame was
-/// presented. A real context will replace the colour with the D3D11 state.
-pub fn present() -> bool {
-    let guard = backend().lock().unwrap();
-    let Some(b) = guard.as_ref() else {
+/// `ID3D11DeviceContext::ClearRenderTargetView` -> remember the clear colour so
+/// the next presented frame uses it. Returns false if no backend.
+pub fn set_clear_color(rgba: [f32; 4]) -> bool {
+    let mut guard = backend().lock().unwrap();
+    let Some(b) = guard.as_mut() else {
         return false;
     };
-    b.swapchain.present_clear(&b.device, [1.0, 0.0, 0.0, 1.0]).is_some()
+    b.frame.clear = rgba;
+    if let Some(t) = b.target.as_mut() {
+        t.record(&b.device, rgba);
+    }
+    true
 }
 
-/// Recreate the swapchain at a new size (surface changed / rotated).
+/// `ID3D11DeviceContext::Draw` with streamed positions+colours (5 floats/vertex)
+/// -> feed the built-in scene pipeline. Returns false if no backend.
+pub fn draw_triangle_strip_vertices(verts: Vec<[f32; 5]>) -> bool {
+    let mut guard = backend().lock().unwrap();
+    let Some(b) = guard.as_mut() else {
+        return false;
+    };
+    if let Some(t) = b.target.as_mut() {
+        t.set_vertices(&b.device, &verts);
+        t.record(&b.device, b.frame.clear);
+    }
+    b.frame.vertices = Some(verts);
+    true
+}
+
+/// Render the built-in test frame on the GPU and present it (X11 or swapchain).
+/// Returns true if a frame was presented. A real context will replace the
+/// triangle with the D3D11 pipeline's output.
+pub fn present() -> bool {
+    let mut guard = backend().lock().unwrap();
+    let Some(b) = guard.as_mut() else {
+        return false;
+    };
+    match &mut b.presenter {
+        Presenter::Swapchain(sc) => sc.present_clear(&b.device, [1.0, 0.0, 0.0, 1.0]).is_some(),
+        Presenter::X11(displays) => {
+            let Some(t) = b.target.as_mut() else {
+                return false;
+            };
+            if !t.render_and_wait(&b.device) {
+                return false;
+            }
+            if !t.read_into(&b.device, &mut b.pixels) {
+                return false;
+            }
+            displays.present(&b.pixels) > 0
+        }
+    }
+}
+
+/// Recreate the presentable surface at a new size (surface changed / rotated).
 pub fn resize(width: u32, height: u32) -> bool {
     let mut guard = backend().lock().unwrap();
     let Some(b) = guard.as_mut() else {
         return false;
     };
-    b.swapchain.destroy(&b.device);
     let extent = ash::vk::Extent2D { width, height };
-    match b.device.create_swapchain(extent, false) {
-        Some(sc) => {
-            b.extent = sc.extent;
-            b.swapchain = sc;
-            true
+    match &mut b.presenter {
+        Presenter::Swapchain(sc) => {
+            sc.destroy(&b.device);
+            match b.device.create_swapchain(extent, false) {
+                Some(newsc) => {
+                    b.extent = newsc.extent;
+                    *sc = newsc;
+                    true
+                }
+                None => false,
+            }
         }
-        None => false,
+        Presenter::X11(displays) => {
+            if let Some(t) = b.target.as_mut() {
+                t.destroy(&b.device);
+            }
+            match OffscreenTarget::new(&b.device, width, height) {
+                Some(t) => {
+                    displays.resize(width, height);
+                    b.pixels = vec![0u8; (width * height * 4) as usize];
+                    b.extent = extent;
+                    b.target = Some(t);
+                    true
+                }
+                None => false,
+            }
+        }
     }
 }
 

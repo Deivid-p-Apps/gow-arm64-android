@@ -105,6 +105,112 @@ fn run_inner(
     }
 }
 
+/// Render the built-in triangle on the GPU and show it on **X11** (Xvfb and/or
+/// the Termux:X11 app). This is the "see it on screen" path: it works even where
+/// Turnip cannot present a swapchain (no DRI3), by rendering to a host-visible
+/// image and `XPutImage`-ing it to every display in `GOW_X11_DISPLAYS`.
+///
+/// `frames == 0` presents a single frame (for capture). Returns 0 on success.
+pub fn run_x11(width: u32, height: u32, frames: u32, log: &mut dyn FnMut(&str)) -> i32 {
+    macro_rules! l {
+        ($($a:tt)*) => { log(&format!($($a)*)) };
+    }
+    l!("[selftest.x11] bring-up for {width}x{height}, frames={frames}");
+    let Some(dev) = NativeDevice::new(std::ptr::null_mut()) else {
+        l!("[selftest.x11] FAIL: NativeDevice::new");
+        return -1;
+    };
+    let Some(mut target) = super::render::OffscreenTarget::new(&dev, width, height) else {
+        l!("[selftest.x11] FAIL: OffscreenTarget::new");
+        return -2;
+    };
+    let Some(mut displays) =
+        super::x11::X11Displays::create_default(width, height, "God of War (native Vulkan)")
+    else {
+        l!("[selftest.x11] FAIL: no X11 display (set GOW_X11_DISPLAYS/DISPLAY)");
+        target.destroy(&dev);
+        return -3;
+    };
+    l!("[selftest.x11] {} display(s) connected", displays.count());
+
+    let mut pixels = vec![0u8; (width * height * 4) as usize];
+    let n = frames.max(1);
+    for i in 0..n {
+        if !target.render_and_wait(&dev) {
+            l!("[selftest.x11] frame {i}: render FAILED");
+            break;
+        }
+        if !target.read_into(&dev, &mut pixels) {
+            l!("[selftest.x11] frame {i}: readback FAILED");
+            break;
+        }
+        let shown = displays.present(&pixels);
+        if i == 0 || i + 1 == n {
+            l!("[selftest.x11] frame {i}: rendered + shown on {shown} display(s)");
+        }
+        displays.sync();
+        // Pace a long run so the image stays on screen (and is capturable);
+        // a 1-frame capture run does not sleep.
+        if n > 10 {
+            std::thread::sleep(std::time::Duration::from_millis(33));
+        }
+    }
+    pixels.truncate(0);
+    displays.sync();
+    target.destroy(&dev);
+    l!("[selftest.x11] done");
+    0
+}
+
+/// Render an animated **3D** scene (depth-tested spinning cube) on the GPU and
+/// show it on X11. Proves the renderer is a real 3D pipeline. Returns 0 on ok.
+pub fn run_x11_scene(width: u32, height: u32, frames: u32, log: &mut dyn FnMut(&str)) -> i32 {
+    macro_rules! l {
+        ($($a:tt)*) => { log(&format!($($a)*)) };
+    }
+    l!("[selftest.scene] bring-up {width}x{height} frames={frames}");
+    let Some(dev) = NativeDevice::new(std::ptr::null_mut()) else {
+        l!("[selftest.scene] FAIL: NativeDevice::new");
+        return -1;
+    };
+    let Some(mut scene) = super::scene::Scene3D::new(&dev, width, height) else {
+        l!("[selftest.scene] FAIL: Scene3D::new");
+        return -2;
+    };
+    let Some(mut displays) =
+        super::x11::X11Displays::create_default(width, height, "God of War (native 3D)")
+    else {
+        l!("[selftest.scene] FAIL: no X11 display");
+        scene.destroy(&dev);
+        return -3;
+    };
+    l!("[selftest.scene] {} display(s)", displays.count());
+    let mut pixels = vec![0u8; (width * height * 4) as usize];
+    let n = frames.max(1);
+    for i in 0..n {
+        if !scene.render_frame(&dev) {
+            l!("[selftest.scene] frame {i}: render FAILED");
+            break;
+        }
+        if !scene.read_into(&dev, &mut pixels) {
+            l!("[selftest.scene] frame {i}: readback FAILED");
+            break;
+        }
+        let shown = displays.present(&pixels);
+        if i == 0 || i + 1 == n {
+            l!("[selftest.scene] frame {i}: 3D cube rendered + shown on {shown} display(s)");
+        }
+        displays.sync();
+        if n > 10 {
+            std::thread::sleep(std::time::Duration::from_millis(33));
+        }
+    }
+    displays.sync();
+    scene.destroy(&dev);
+    l!("[selftest.scene] done");
+    0
+}
+
 /// C-ABI entry point for `tools/vk_native_probe.c` (feature `vkprobe`). Logs via
 /// the runtime's `glog` (logcat/eprintln) and returns 0 on success.
 ///
@@ -129,5 +235,15 @@ pub unsafe extern "C" fn gow_vk_native_selftest_gipa(
 ) -> i32 {
     let rc = run_with_gipa(gipa, window, frames.max(1), &mut |m| crate::glog!("{m}"));
     crate::glog!("[selftest] gow_vk_native_selftest_gipa -> {rc}");
+    rc
+}
+
+/// C-ABI: render the built-in triangle on the GPU and show it on X11
+/// (Xvfb/Termux:X11). `frames == 0` = one frame.
+#[cfg(feature = "vkprobe")]
+#[no_mangle]
+pub unsafe extern "C" fn gow_vk_native_x11_demo(width: u32, height: u32, frames: u32) -> i32 {
+    let rc = run_x11(width, height, frames, &mut |m| crate::glog!("{m}"));
+    crate::glog!("[selftest] gow_vk_native_x11_demo -> {rc}");
     rc
 }

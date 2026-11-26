@@ -1105,6 +1105,13 @@ impl ImportResolver {
                 true
             }
             ("d3d11.dll", _) | ("dxgi.dll", _) | ("d3dcompiler_47.dll", _) => {
+                // Native Vulkan backend (GOW_GFX_BACKEND=native): build the D3D11
+                // COM objects ourselves instead of routing to DXVK. DXVK stays the
+                // default and is untouched when the env var is unset.
+                if crate::vk_native::bridge::is_enabled() && dll_l != "d3dcompiler_47.dll" {
+                    c.gpr.rax = crate::vk_native::d3d11_objects::call_entry(&func, cpu);
+                    return true;
+                }
                 // Route to the loaded graphics backend (DXVK Native). The COM
                 // vtables it returns are what the game calls afterwards.
                 match self.graphics.resolve(&dll_l, &func) {
@@ -1180,6 +1187,19 @@ impl ImportResolver {
 
         let is_gfx = dll.starts_with("d3d11") || dll.starts_with("dxgi") || dll.starts_with("d3dcompiler");
         if is_gfx {
+            // Native Vulkan backend: serve D3D11/DXGI entry points ourselves.
+            if crate::vk_native::bridge::is_enabled() && !dll.starts_with("d3dcompiler") {
+                let func_c = func.clone();
+                let thunk = crate::hostcall::register(move |c| {
+                    let r = unsafe {
+                        crate::vk_native::d3d11_objects::call_entry(&func_c, c)
+                    };
+                    unsafe { (*c).gpr.rax = r; }
+                });
+                crate::glog!("[gow.vk.native] GetProcAddress({dll}!{func}) -> thunk 0x{thunk:x}");
+                proc_thunks().lock().unwrap().insert(key, thunk);
+                return thunk;
+            }
             // DXVK Native export, called through a marshalling thunk.
             if let Some(addr) = self.graphics.resolve(&dll, &func) {
                 let thunk = crate::hostcall::register(move |c| {

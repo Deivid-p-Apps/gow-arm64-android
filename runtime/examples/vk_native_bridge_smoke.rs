@@ -19,16 +19,26 @@ fn main() {
     bridge::dispatch("dxgi.dll", "CreateDXGIFactory1");
     bridge::dispatch("d3d11.dll", "D3D11CreateDevice");
 
+    let frames: u32 = std::env::var("GOW_X11_DEMO_FRAMES")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .or_else(|| std::env::args().nth(1).and_then(|s| s.parse().ok()))
+        .unwrap_or(5);
     let mut ok = 0;
-    for i in 0..5 {
+    for i in 0..frames {
         if bridge::present() {
-            println!("[bridge] frame {i} presented");
+            if i < 2 || i + 1 == frames {
+                println!("[bridge] frame {i} presented");
+            }
             ok += 1;
         } else {
             println!("[bridge] frame {i} FAILED");
             break;
         }
+        if frames > 10 {
+            std::thread::sleep(std::time::Duration::from_millis(33));
+        }
     }
-    println!("[bridge] {ok}/5 frames");
-    std::process::exit(if ok == 5 { 0 } else { 1 });
+    println!("[bridge] {ok}/{frames} frames");
+    std::process::exit(if ok == frames { 0 } else { 1 });
 }
