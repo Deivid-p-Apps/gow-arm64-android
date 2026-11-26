@@ -12,7 +12,7 @@
 //! `GowCpu` pointer. The handler reads/writes the guest register file itself.
 
 use crate::dispatch::GowCpu;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 /// Base of the pseudo-address range used for host thunks. Must not overlap the
 /// guest image (0x140000000) or real host memory.
@@ -33,6 +33,31 @@ pub fn register<F: Fn(*mut GowCpu) + Send + Sync + 'static>(f: F) -> u64 {
 
 pub fn is_thunk(addr: u64) -> bool {
     addr >= THUNK_BASE && addr < THUNK_BASE + (THUNKS.lock().unwrap().len() as u64 + 1) * THUNK_STRIDE
+}
+
+/// Executable memory ranges of host libraries whose code the guest may call
+/// directly (registered by the graphics bridge when it dlopens DXVK). A COM
+/// vtable method returned by a backend object lives inside such a range, so the
+/// dispatcher must marshal the call instead of treating it as a MISSCALL.
+fn host_code_ranges() -> &'static Mutex<Vec<(u64, u64)>> {
+    static R: OnceLock<Mutex<Vec<(u64, u64)>>> = OnceLock::new();
+    R.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Register `[lo, hi)` as callable host code (called for each dlopen'd backend).
+pub fn register_host_code(lo: u64, hi: u64) {
+    if hi > lo {
+        host_code_ranges().lock().unwrap().push((lo, hi));
+    }
+}
+
+/// Whether `addr` falls inside a registered host-code range.
+pub fn is_host_code(addr: u64) -> bool {
+    host_code_ranges()
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|&(lo, hi)| addr >= lo && addr < hi)
 }
 
 /// Run the thunk at `addr` with the given CPU. Returns false if no handler.

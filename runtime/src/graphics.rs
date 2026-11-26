@@ -76,6 +76,11 @@ impl GraphicsBridge {
             }
             handles().lock().unwrap().insert(key, h as usize);
             crate::glog!("[gow.gfx] loaded backend for {dll} from {path}");
+            // Register the library's executable + data ranges so the dispatcher
+            // recognizes COM vtable methods that live inside it (DXVK returns
+            // objects whose virtual methods are host code) and calls them
+            // instead of recording a MISSCALL.
+            register_host_ranges(h as usize, path);
             true
         }
     }
@@ -302,6 +307,33 @@ impl GraphicsBridge {
 
 const RTLD_NOW: i32 = 2;
 const RTLD_GLOBAL: i32 = 0x100;
+
+/// Register every executable mapping of the shared object at `path` so the guest
+/// dispatcher can call COM vtable methods that live inside it. Uses
+/// `/proc/self/maps`, matching lines whose file path ends with the basename.
+fn register_host_ranges(_handle: usize, path: &str) {
+    let base = std::path::Path::new(path)
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string());
+    let Ok(maps) = std::fs::read_to_string("/proc/self/maps") else { return };
+    for line in maps.lines() {
+        // "<start>-<end> <perms> <off> <dev> <inode> <path>"
+        let mut it = line.split_whitespace();
+        let (Some(range), Some(perms)) = (it.next(), it.next()) else { continue };
+        if !perms.starts_with('r') || !perms.contains('x') {
+            continue; // only executable segments hold callable code
+        }
+        let Some(file) = it.nth(3) else { continue }; // skip off, dev, inode
+        if !file.ends_with(&base) {
+            continue;
+        }
+        let Some((a, b)) = range.split_once('-') else { continue };
+        if let (Ok(lo), Ok(hi)) = (u64::from_str_radix(a, 16), u64::from_str_radix(b, 16)) {
+            crate::hostcall::register_host_code(lo, hi);
+        }
+    }
+}
 
 extern "C" {
     fn dlopen(path: *const std::os::raw::c_char, mode: i32) -> *mut std::ffi::c_void;

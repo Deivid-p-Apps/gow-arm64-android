@@ -874,6 +874,16 @@ pub unsafe extern "C" fn gow_call_indirect(cpu: *mut GowCpu, target_va: u64) {
         let rva = (target_va - c.image_base) as u32;
         // If the target has no lifted function, it will be a dead end at runtime.
         c.next_rva = rva;
+    } else if crate::hostcall::is_host_code(target_va) {
+        // A real host function pointer the guest obtained from a loaded backend
+        // (e.g. DXVK returns an IDXGIFactory1 whose vtable methods live inside
+        // libdxvk_dxgi.so). Marshal the guest's MS-x64 registers into the host
+        // AArch64 call and put the result back in RAX. Without this, every COM
+        // virtual call on a backend object (CreateSwapChain, GetAdapter,
+        // CreateTexture2D, ...) was a MISSCALL and D3D never progressed.
+        let r = crate::graphics::GraphicsBridge::call_addr_raw(target_va as usize, cpu);
+        let c = &mut *cpu;
+        c.gpr.rax = r;
     } else {
         c.missing_indirect_calls += 1;
         // Dedup: a retry loop hitting the same dead pointer must not flood the
