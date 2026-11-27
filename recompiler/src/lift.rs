@@ -293,6 +293,28 @@ pub fn lift(pe: &PeImage, out_dir: &std::path::Path) -> Result<LiftOutput> {
                             if t >= tva && t < tend && entries.insert(t) { added += 1; }
                         }
                     }
+                    // Conditional branches (`jcc`) target shared tails/epilogues
+                    // that are not separate `.pdata` functions and are not reached
+                    // by a direct `call`/`jmp`. When such a target falls outside the
+                    // current body bound it was emitted as a `gow_trampoline` miss
+                    // and the caller then ran off (e.g. the job worker's
+                    // `je 0x400a0b` tail hit `trampoline miss -> rva=0x400a0b`,
+                    // killing the worker before it ran its job). A branch target is
+                    // an exact instruction boundary, so seed it without the
+                    // 16-byte-alignment heuristic used for data pointers.
+                    if insn.op0_kind() == OpKind::NearBranch64 && is_jcc(insn.mnemonic()) {
+                        let t = insn.near_branch64().wrapping_sub(pe.image_base);
+                        if t < 0xffff_ffff {
+                            let t = t as u32;
+                            // Only when the target is NOT inside a `.pdata` function:
+                            // such a target is already inlined into its `.pdata` body
+                            // via `goto L_`. A target outside any `.pdata` function
+                            // (a shared tail of leaf/discovered code) is the gap.
+                            let idx = pd.partition_point(|&(s, _)| s <= t);
+                            let in_pdata = idx > 0 && t < pd[idx - 1].1;
+                            if !in_pdata && t >= tva && t < tend && entries.insert(t) { added += 1; }
+                        }
+                    }
                     // Address-taken functions: `lea reg, [rip+disp]` materialises a
                     // function pointer the engine stores in vtables/job tables and
                     // calls indirectly. These have no `.pdata` entry and no absolute

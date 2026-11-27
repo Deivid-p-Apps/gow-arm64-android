@@ -999,6 +999,10 @@ impl ImportResolver {
                 // A real cooperative handoff (D040): the calling host thread
                 // blocks until the target fiber grants it the baton back. This is
                 // the job scheduler's yield/resume path.
+                if a0 == 0 {
+                    crate::glog!("[gow.fiber] SwitchToFiber(0) rdi=0x{:x} rdx=0x{:x} r8=0x{:x} rva=0x{:x}",
+                        c.gpr.rdi, c.gpr.rdx, c.gpr.r8, crate::crashlog::current_rva());
+                }
                 crate::fibers::switch(a0);
                 c.gpr.rax = 1;
                 true
@@ -1006,7 +1010,9 @@ impl ImportResolver {
             ("kernel32.dll", "ConvertThreadToFiber") | ("kernel32.dll", "ConvertThreadToFiberEx") => {
                 // Give the calling thread its own fiber handle so other fibers can
                 // switch back to it.
-                c.gpr.rax = crate::fibers::convert_current();
+                let h = crate::fibers::convert_current();
+                crate::glog!("[gow.fiber] ConvertThreadToFiber -> handle=0x{h:x}");
+                c.gpr.rax = h;
                 true
             }
             ("kernel32.dll", "ConvertFiberToThread") => { c.gpr.rax = 1; true }
@@ -1181,7 +1187,9 @@ impl ImportResolver {
             (dll, _) if dll.starts_with("libsce") => {
                 // Sony compatibility DLLs (libSceGnm/Pad/JobManager/GpuAddress):
                 // return a non-null handle so callers don't deref null.
-                c.gpr.rax = crate::steam::sce(func).unwrap_or(0);
+                let v = crate::steam::sce(func).unwrap_or(0);
+                crate::glog!("[gow.sce] {dll}!{func} -> 0x{v:x}");
+                c.gpr.rax = v;
                 true
             }
             ("user32.dll", "GetAsyncKeyState") | ("user32.dll", "GetKeyState") => {

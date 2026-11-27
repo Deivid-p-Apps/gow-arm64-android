@@ -270,3 +270,49 @@ Assim um switch suspende exatamente uma thread e retoma exatamente uma — a mes
 semântica observável de uma corrotina stackful, sem `swapcontext` (ausente no
 bionic do Termux). `CreateFiber`/`ConvertThreadToFiber`/`GetCurrentFiber` usam
 handles em `0x0f00_...`, distintos dos thunks de hostcall.
+
+## D041 — `call [reg/mem]` é uma chamada INDIRETA (executa inline, não agenda)
+`gow_call_ptr` tratava `call qword [rbx+0x10]` como um `jmp`: apenas gravava o
+alvo em `next_rva` e retornava. O chamador então **continuava** executando o
+código após o `call` — no worker do job system isso significava executar
+`xor ecx,ecx` + `call _endthreadex` e sair **antes** de o job rodar, e o
+escalonador via o descritor de job zerado (`SwitchToFiber(0)`). Corrigido: como
+o modelo do lifter é de chamadas C aninhadas (D008), `gow_call_ptr` resolve o
+alvo e, se estiver no `func_map`, chama `f_target(cpu)` inline e retorna (o `ret`
+do alvo é um `return` C). Thunks de hostcall e código host continuam iguais;
+alvo em-imagem sem lift cai no despacho adiado.
+
+## D042 — alvos de branch condicional (`jcc`) fora de `.pdata` viram entradas
+`je 0x400a0b` salta para um epílogo compartilhado que **não** está em `.pdata`
+nem é alvo de `call`/`jmp` direto. O lifter só descobria alvos de `call`/`jmp` e
+ponteiros/`lea`; então esse alvo ficava fora do corpo e virava
+`trampoline miss -> rva=0x400a0b`, matando o worker (o fibre morria no
+`f_400964`). Agora, na descoberta por fixpoint, todo alvo de `jcc` que cai em
+`.text` e **fora de qualquer função `.pdata`** é semeado como entrada. (Alvos
+dentro de `.pdata` já são inlinados por `goto L_`; semear tudo duplicava todas as
+funções — 269.950 vs 120.505.) 97.506 -> 120.505 funções.
+
+## D043 — Estado do job system: fibers funcionam; falta o JobManager inicializar
+Após D038–D042 o engine chega ao **job system** com o sistema de fibers
+completo e correto:
+- 30 `CreateFiber` (24 workers `[param+0x10]=0xd37a50`, 6 `0xd378d0`),
+- 6 workers `_beginthreadex` (CREATE_SUSPENDED, D038),
+- handoffs reais `SwitchToFiber` entre fibers (D040),
+- `_initterm` completo sem `trampoline miss` nas funções de boot.
+
+O bloqueio restante: o **`main`** (`f_4058e0`) chama o pump (`f_9c4cc0`) com
+`this = [0x141188b08] = 0`, e o pump gira no dequeue (`f_98c0`) com a fila vazia;
+o job manager só inicializa esse global em `f_40f2f8`, que **não é alcançado**
+antes do pump. Como o engine cria os workers (que estão em `f_40f2bd → f_40f2f8`)
+por outro caminho, o objeto do JobManager acaba criado mas o ponteiro global
+continua 0 no primeiro pump. Falta localizar por que o caminho de boot
+(`f_40ef50` → `f_40f25e` → `f_40f2bd`) não inicializa o global antes do pump —
+o próximo ponto a corrigir.
+
+Nota: D041 mudou `_initterm` de 2653 para 2528 inicializadores alcançados. Com o
+`call [reg/mem]` antigo (agendado) a contagem era maior porque o chamador
+executava código antes do alvo — despachos espúrios. O comportamento inline é o
+correto; ambos chegam ao mesmo bloqueio.
+
+Diagnóstico descartado: `GetModuleFileNameW`/`getenv` no `f_40ef50` funcionam; a
+duplicação do corpo do `_beginthreadex` em 4 funções já existia antes de D042.

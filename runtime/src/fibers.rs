@@ -106,6 +106,7 @@ pub unsafe fn create(cpu: *mut GowCpu, start_rva: u64, param: u64) -> u64 {
     let image_size = c.image_size as usize;
     let map: Vec<(u32, GowFunc)> = c.func_map.iter().map(|(k, v)| (*k, *v)).collect();
     let rva = start_rva as u32;
+    crate::glog!("[gow.fiber] CreateFiber start_rva=0x{start_rva:x} param=0x{param:x} -> handle=0x{handle:x}");
     std::thread::spawn(move || {
         let cpu = GowCpu::new(image_base, image_size);
         let cp = Box::into_raw(cpu);
@@ -127,7 +128,6 @@ pub unsafe fn create(cpu: *mut GowCpu, start_rva: u64, param: u64) -> u64 {
         let park = Ctl::new();
         park.wait_turn();
     });
-    crate::glog!("[gow.fiber] CreateFiber start_rva=0x{start_rva:x} param=0x{param:x} -> handle=0x{handle:x}");
     handle
 }
 

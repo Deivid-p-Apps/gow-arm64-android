@@ -1081,7 +1081,50 @@ pub unsafe extern "C" fn gow_trampoline(cpu: *mut GowCpu, target_rva: u32) {
 
 #[no_mangle]
 pub unsafe extern "C" fn gow_call_ptr(cpu: *mut GowCpu, target_va: u64) {
-    gow_call_indirect(cpu, target_va);
+    // `call [reg/mem]` is an INDIRECT CALL: unlike `jmp`, control must come back
+    // to the instruction after the call with the callee's result in RAX. The
+    // recompiler's model is nested C calls (D008): a direct call pushes the
+    // return RVA, runs `f_target(cpu)`, then pops. This function must do the
+    // same for an indirect target, otherwise the target was merely *queued* in
+    // `next_rva` and the caller kept executing past the call — clobbering the
+    // very registers (e.g. `xor ecx,ecx` before `_endthreadex`) the callee
+    // needed. That is what made the job workers call `[rbx+0x10]` out of order
+    // and the scheduler see a zero job descriptor (D041).
+    if crate::hostcall::is_thunk(target_va) {
+        crate::hostcall::call(target_va, cpu);
+        return;
+    }
+    let c = &mut *cpu;
+    if target_va >= c.image_base && target_va < c.image_base + c.image_size {
+        let rva = (target_va - c.image_base) as u32;
+        if let Some(f) = c.func_map.get(&rva).copied() {
+            f(cpu); // run inline; the callee's `ret` is a C return
+            return;
+        }
+        // In-image but not lifted: fall back to the deferred dispatch.
+        c.next_rva = rva;
+    } else if crate::hostcall::is_host_code(target_va) {
+        let this = c.gpr.rcx;
+        let r = crate::graphics::GraphicsBridge::call_addr_raw(target_va as usize, cpu);
+        let c = &mut *cpu;
+        if com_trace_seen(target_va) {
+            crate::glog!("[gow.com] host-call @{target_va:#x} this={this:#x} -> rax={r:#x} from rva={:#x}",
+                c.rip.wrapping_sub(c.image_base));
+        }
+        c.gpr.rax = r;
+    } else {
+        c.missing_indirect_calls += 1;
+        let should_log = {
+            let mut seen = misscall_seen().lock().unwrap();
+            seen.len() < 64 && seen.insert(target_va)
+        };
+        if should_log {
+            crate::glog!("[gow.MISSCALL] indirect target_va=0x{target_va:x} (rva would be 0x{:x}) from rva=0x{:x}",
+                target_va.wrapping_sub(c.image_base),
+                c.rip.wrapping_sub(c.image_base));
+        }
+        c.next_rva = STOP_RVA;
+    }
 }
 
 #[no_mangle]
